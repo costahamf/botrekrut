@@ -37,7 +37,7 @@ DB_CONN = None
 
 def init_database():
     """Инициализирует БД в памяти и загружает данные из файла"""
-    global DB_CONN
+     global DB_CONN
     DB_CONN = sqlite3.connect(':memory:', check_same_thread=False)
     c = DB_CONN.cursor()
     
@@ -211,10 +211,13 @@ def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, c
 # ========== ФУНКЦИИ ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕЙ ==========
 def is_registered(user_id):
     conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-    result = c.fetchone()
-    return result is not None
+    try:
+        c = conn.cursor()
+        c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        result = c.fetchone()
+        return result is not None
+    finally:
+        conn.close()  # Закрываем только после выполнения запроса
 
 def register_user(user_id, username, first_name, last_name):
     conn = get_db()
@@ -1573,6 +1576,7 @@ def main():
     
 if __name__ == '__main__':
     main()
+
 
 
 
