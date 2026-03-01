@@ -137,8 +137,8 @@ def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, c
             full_name,
             city,
             "⏳ Ожидает",  # Статус
-            False,  # Чекбокс для подтверждения (изначально не отмечен)
-            False   # Чекбокс для отклонения (изначально не отмечен)
+            "",  # Пусто для чекбокса ПРИНЯТО
+            ""   # Пусто для чекбокса ОТКЛОНЕНО
         ]
         new_row = sheet.append_row(row, value_input_option='USER_ENTERED')
         
@@ -147,9 +147,19 @@ def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, c
         all_records = sheet.get_all_records()
         row_number = len(all_records) + 1
         
-        # Преобразуем ячейки в чекбоксы
-        sheet.format(f"G{row_number}", {"checkbox": True})
-        sheet.format(f"H{row_number}", {"checkbox": True})
+        # Преобразуем ячейки в чекбоксы (именно так, как на твоем скрине)
+        sheet.format(f"G{row_number}", {
+            "checkbox": {
+                "checkedValue": "TRUE",
+                "uncheckedValue": "FALSE"
+            }
+        })
+        sheet.format(f"H{row_number}", {
+            "checkbox": {
+                "checkedValue": "TRUE",
+                "uncheckedValue": "FALSE"
+            }
+        })
         
         logger.info(f"✅ Курьер {full_name} добавлен в Google Sheets (строка {row_number}) с чекбоксами")
         return True, row_number
@@ -168,19 +178,15 @@ def check_pending_couriers():
         records = sheet.get_all_records()
         
         for idx, record in enumerate(records, start=2):  # со 2 строки (1 - заголовки)
-            full_name = record.get('ФИО курьера', '')
+            full_name = record.get('ФИО клиента', '')
             city = record.get('Город', '')
             
             if not full_name or not city:
                 continue
             
-            # Получаем значения чекбоксов (True/False)
-            checkbox_confirm = sheet.acell(f"G{idx}").value
-            checkbox_reject = sheet.acell(f"H{idx}").value
-            
-            # Преобразуем в булевы значения
-            is_confirm = checkbox_confirm == 'TRUE'
-            is_reject = checkbox_reject == 'TRUE'
+            # Получаем значения чекбоксов (через API они приходят как True/False)
+            is_confirm = record.get('ПРИНЯТО', False)
+            is_reject = record.get('ОТКЛОНЕНО', False)
             
             # Для каждого курьера создаем НОВОЕ соединение
             conn = get_db()
@@ -197,7 +203,7 @@ def check_pending_couriers():
                     courier_id, recruiter_id = courier
                     
                     # Проверяем чекбоксы
-                    if is_confirm:
+                    if is_confirm and not is_reject:  # Только если ПРИНЯТО отмечен, а ОТКЛОНЕНО нет
                         # Подтверждаем курьера
                         c.execute('''UPDATE couriers 
                                      SET status = 'confirmed', confirmed_at = ? 
@@ -207,12 +213,12 @@ def check_pending_couriers():
                         # Обновляем статус в Google Sheets
                         sheet.update_cell(idx, 6, "✅ Подтвержден")
                         
-                        # Снимаем отметку с чекбокса
+                        # Снимаем отметку с чекбокса (опционально)
                         sheet.update_cell(idx, 7, "FALSE")
                         
                         logger.info(f"✅ Курьер {full_name} подтвержден (строка {idx})")
                         
-                    elif is_reject:
+                    elif is_reject and not is_confirm:  # Только если ОТКЛОНЕНО отмечен, а ПРИНЯТО нет
                         # Отклоняем курьера
                         c.execute('''UPDATE couriers 
                                      SET status = 'rejected' 
@@ -221,7 +227,7 @@ def check_pending_couriers():
                         # Обновляем статус в Google Sheets
                         sheet.update_cell(idx, 6, "❌ Отклонен")
                         
-                        # Снимаем отметку с чекбокса
+                        # Снимаем отметку с чекбокса (опционально)
                         sheet.update_cell(idx, 8, "FALSE")
                         
                         logger.info(f"❌ Курьер {full_name} отклонен (строка {idx})")
@@ -1689,6 +1695,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
