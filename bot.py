@@ -1479,7 +1479,82 @@ async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += "─" * 20 + "\n"
         
         await send_and_track(update, context, text, parse_mode='Markdown')
-
+# ========== ТЕСТ GOOGLE SHEETS ==========
+async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Тестовая команда для проверки Google Sheets"""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Только для админа")
+        return
+    
+    await update.message.reply_text("🔄 Тестирую подключение к Google Sheets...")
+    
+    try:
+        # Проверяем переменные окружения
+        creds_json = os.environ.get('GOOGLE_CREDS_JSON')
+        sheet_id = os.environ.get('GOOGLE_SHEET_ID')
+        
+        if not creds_json:
+            await update.message.reply_text("❌ GOOGLE_CREDS_JSON не найдена")
+            return
+        
+        if not sheet_id:
+            await update.message.reply_text("❌ GOOGLE_SHEET_ID не найдена")
+            return
+        
+        await update.message.reply_text(f"✅ Переменные найдены\nID таблицы: {sheet_id}")
+        
+        # Пробуем подключиться
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        
+        # Парсим JSON
+        try:
+            creds_dict = json.loads(creds_json)
+            await update.message.reply_text("✅ JSON распарсен успешно")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка парсинга JSON: {str(e)}")
+            return
+        
+        # Создаем credentials
+        try:
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+            await update.message.reply_text("✅ Credentials созданы")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка создания credentials: {str(e)}")
+            return
+        
+        # Авторизуемся
+        try:
+            client = gspread.authorize(creds)
+            await update.message.reply_text("✅ Авторизация в Google Sheets успешна")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка авторизации: {str(e)}")
+            return
+        
+        # Открываем таблицу
+        try:
+            sheet = client.open_by_key(sheet_id).sheet1
+            await update.message.reply_text("✅ Таблица открыта успешно")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка открытия таблицы: {str(e)}")
+            return
+        
+        # Пробуем записать тестовые данные
+        try:
+            test_row = [
+                datetime.now().strftime("%d.%m.%Y %H:%M"),
+                "ТЕСТ",
+                "@test",
+                "Тестовый Курьер",
+                "Тест-город"
+            ]
+            sheet.append_row(test_row)
+            await update.message.reply_text("✅ Тестовая запись успешно добавлена в таблицу!")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка записи в таблицу: {str(e)}")
+            return
+            
+    except Exception as e:
+        await update.message.reply_text(f"❌ Общая ошибка: {str(e)}")
 # ========== ЗАПУСК ==========
 def main():
     init_database()
@@ -1488,6 +1563,7 @@ def main():
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin_requests))
+    application.add_handler(CommandHandler("testgoogle", test_google))  # 👈 Добавь эту строку
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(CallbackQueryHandler(next_question_callback, pattern='^next_question$'))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
@@ -1497,3 +1573,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
