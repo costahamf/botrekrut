@@ -1414,40 +1414,35 @@ async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     withdrawals = get_pending_withdrawals()
     
     if not tickets and not withdrawals:
-        await update.message.reply_text(
-            "📭 *Нет активных обращений*\n\n"
-            "• Нет тикетов в поддержку\n"
-            "• Нет заявок на вывод",
-            parse_mode='Markdown'
-        )
+        await update.message.reply_text("📭 Нет активных обращений")
         return
     
     text = ""
     
     if tickets:
-        text += "🆘 *Активные обращения в поддержку:*\n\n"
+        text += "🆘 АКТИВНЫЕ ОБРАЩЕНИЯ В ПОДДЕРЖКУ:\n\n"
         for ticket in tickets:
-            text += f"🆔 *{ticket[0]}*\n"
+            text += f"🆔 {ticket[0]}\n"
             text += f"👤 {ticket[3]} (@{ticket[2]})\n"
             text += f"📝 {ticket[4][:100]}...\n"
             text += f"📅 {ticket[5]}\n"
-            text += "─" * 20 + "\n"
+            text += "──────────────────────\n"
     
     if withdrawals:
         if tickets:
-            text += "\n\n"
-        text += "💰 *Ожидающие заявки на вывод:*\n\n"
+            text += "\n"
+        text += "💰 ОЖИДАЮЩИЕ ЗАЯВКИ НА ВЫВОД:\n\n"
         for w in withdrawals:
-            text += f"🆔 *{w[0]}*\n"
+            text += f"🆔 {w[0]}\n"
             text += f"👤 {w[2]} (@{w[3]})\n"
             text += f"💰 {w[4]} руб.\n"
             text += f"💳 {w[5]}\n"
             text += f"📝 {w[6]}\n"
             text += f"📅 {w[7]}\n"
-            text += "─" * 20 + "\n"
+            text += "──────────────────────\n"
     
-    # Отправляем напрямую, без send_and_track, чтобы не удалять сообщение с командой
-    await update.message.reply_text(text, parse_mode='Markdown')
+    # Отправляем без Markdown, простым текстом
+    await update.message.reply_text(text)
 
 # ========== ТЕСТ GOOGLE SHEETS ==========
 async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1544,5 +1539,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
