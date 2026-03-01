@@ -35,9 +35,9 @@ CALCULATOR_URL = "https://eda.yandex.ru/partner/perf/samara/?utm_medium=cpc&utm_
 # ========== ПОСТОЯННОЕ ХРАНЕНИЕ ДАННЫХ ==========
 DB_CONN = None
 
-def init_database():
+ddef init_database():
     """Инициализирует БД в памяти и загружает данные из файла"""
-     global DB_CONN
+    global DB_CONN
     DB_CONN = sqlite3.connect(':memory:', check_same_thread=False)
     c = DB_CONN.cursor()
     
@@ -118,6 +118,7 @@ def init_database():
     start_auto_backup()
 
 def get_db():
+    """Возвращает соединение с БД (не закрывает его глобально)"""
     global DB_CONN
     if DB_CONN is None:
         init_database()
@@ -127,6 +128,10 @@ def backup_database():
     """Сохраняет все данные в JSON"""
     try:
         conn = get_db()
+        if conn is None:
+            logger.error("Нет соединения с БД")
+            return
+            
         c = conn.cursor()
         
         backup = {
@@ -143,7 +148,7 @@ def backup_database():
         logger.info("💾 Данные сохранены")
     except Exception as e:
         logger.error(f"Ошибка сохранения: {e}")
-
+        
 def start_auto_backup():
     """Запускает автосохранение в фоне"""
     def auto_backup_worker():
@@ -216,16 +221,22 @@ def is_registered(user_id):
         c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
         result = c.fetchone()
         return result is not None
-    finally:
-        conn.close()  # Закрываем только после выполнения запроса
+    except Exception as e:
+        logger.error(f"Ошибка в is_registered: {e}")
+        return False
+    # НЕ закрываем conn - оно глобальное!
 
 def register_user(user_id, username, first_name, last_name):
     conn = get_db()
-    c = conn.cursor()
-    registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("INSERT OR IGNORE INTO users (user_id, username, first_name, last_name, registration_date, balance) VALUES (?, ?, ?, ?, ?, 0)",
-              (user_id, username, first_name, last_name, registration_date))
-    conn.commit()
+    try:
+        c = conn.cursor()
+        registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("INSERT OR IGNORE INTO users (user_id, username, first_name, last_name, registration_date, balance) VALUES (?, ?, ?, ?, ?, 0)",
+                  (user_id, username, first_name, last_name, registration_date))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка в register_user: {e}")
+    # НЕ закрываем conn
 
 def update_test_status(user_id, passed):
     conn = get_db()
@@ -1576,6 +1587,7 @@ def main():
     
 if __name__ == '__main__':
     main()
+
 
 
 
