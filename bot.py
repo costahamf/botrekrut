@@ -164,20 +164,21 @@ def check_pending_couriers():
         if not sheet:
             return
         
-        conn = get_db()
-        c = conn.cursor()
+        # Получаем все записи из таблицы
+        records = sheet.get_all_records()
         
-        try:
-            # Получаем все записи из таблицы
-            records = sheet.get_all_records()
+        for idx, record in enumerate(records, start=2):  # со 2 строки (1 - заголовки)
+            full_name = record.get('ФИО курьера', '')
+            city = record.get('Город', '')
             
-            for idx, record in enumerate(records, start=2):  # со 2 строки (1 - заголовки)
-                full_name = record.get('ФИО курьера', '')
-                city = record.get('Город', '')
-                
-                if not full_name or not city:
-                    continue
-                
+            if not full_name or not city:
+                continue
+            
+            # Для каждого курьера создаем НОВОЕ соединение
+            conn = get_db()
+            c = conn.cursor()
+            
+            try:
                 # Проверяем, есть ли этот курьер в БД со статусом pending
                 c.execute('''SELECT id, recruiter_id FROM couriers 
                              WHERE full_name = ? AND city = ? AND status = 'pending' 
@@ -215,17 +216,18 @@ def check_pending_couriers():
                             sheet.update_cell(idx, 6, "❌ Отклонен")
                             
                             logger.info(f"❌ Курьер {full_name} отклонен (строка {idx})")
+                            
+                        conn.commit()
+                        
                     except Exception as e:
                         logger.error(f"Ошибка при проверке строки {idx}: {e}")
-                        continue
-            
-            conn.commit()
-            
-        except Exception as e:
-            logger.error(f"Ошибка при обработке записей: {e}")
-        finally:
-            conn.close()
-        
+                        conn.rollback()
+                        
+            except Exception as e:
+                logger.error(f"Ошибка при обработке курьера {full_name}: {e}")
+            finally:
+                conn.close()  # Закрываем соединение для каждого курьера
+                
     except Exception as e:
         logger.error(f"Ошибка проверки статусов: {e}")
 
@@ -1681,6 +1683,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
