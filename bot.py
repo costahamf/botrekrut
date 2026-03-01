@@ -90,12 +90,64 @@ def init_database():
     DB_CONN.commit()
     logger.info("✅ База данных инициализирована в файле users.db")
 
+# ========== ПОСТОЯННОЕ ХРАНЕНИЕ ДАННЫХ ==========
 def get_db():
-    """Возвращает соединение с БД"""
-    global DB_CONN
-    if DB_CONN is None:
-        init_database()
-    return DB_CONN
+    """Создает новое соединение с БД"""
+    return sqlite3.connect('users.db', check_same_thread=False)
+
+def init_database():
+    """Инициализирует БД в файле (данные сохраняются)"""
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Таблица пользователей
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (user_id INTEGER PRIMARY KEY,
+                  username TEXT,
+                  first_name TEXT,
+                  last_name TEXT,
+                  registration_date TEXT,
+                  balance REAL DEFAULT 0,
+                  test_passed INTEGER DEFAULT 0,
+                  test_attempts INTEGER DEFAULT 0,
+                  last_test_attempt TEXT)''')
+    
+    # Таблица заявок на вывод
+    c.execute('''CREATE TABLE IF NOT EXISTS withdrawals
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id INTEGER,
+                  amount REAL,
+                  payment_method TEXT,
+                  payment_details TEXT,
+                  status TEXT DEFAULT 'pending',
+                  request_date TEXT)''')
+    
+    # Таблица тикетов поддержки
+    c.execute('''CREATE TABLE IF NOT EXISTS support_tickets
+                 (ticket_id TEXT PRIMARY KEY,
+                  user_id INTEGER,
+                  username TEXT,
+                  first_name TEXT,
+                  message TEXT,
+                  status TEXT DEFAULT 'open',
+                  created_at TEXT,
+                  answered_at TEXT,
+                  admin_reply TEXT)''')
+    
+    # Таблица курьеров
+    c.execute('''CREATE TABLE IF NOT EXISTS couriers
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  recruiter_id INTEGER,
+                  full_name TEXT,
+                  city TEXT,
+                  status TEXT DEFAULT 'pending',
+                  registered_at TEXT,
+                  confirmed_at TEXT,
+                  sheet_row INTEGER)''')
+    
+    conn.commit()
+    conn.close()
+    logger.info("✅ База данных инициализирована в файле users.db")
 
 # ========== GOOGLE SHEETS ИНТЕГРАЦИЯ ==========
 def get_google_sheet():
@@ -180,6 +232,9 @@ def check_pending_couriers():
                 full_name = record.get('ФИО курьера', '')
                 city = record.get('Город', '')
                 
+                if not full_name or not city:
+                    continue
+                
                 # Проверяем, есть ли этот курьер в БД со статусом pending
                 c.execute('''SELECT id, recruiter_id FROM couriers 
                              WHERE full_name = ? AND city = ? AND status = 'pending' 
@@ -190,32 +245,36 @@ def check_pending_couriers():
                     courier_id, recruiter_id = courier
                     
                     # Проверяем ячейки с кнопками (G и H)
-                    cell_g = sheet.cell(idx, 7).value  # Колонка G (✅)
-                    cell_h = sheet.cell(idx, 8).value  # Колонка H (❌)
-                    
-                    # Проверяем, нажата ли кнопка подтверждения
-                    if cell_g and "✅" in str(cell_g):
-                        # Подтверждаем курьера
-                        c.execute('''UPDATE couriers 
-                                     SET status = 'confirmed', confirmed_at = ? 
-                                     WHERE id = ?''', 
-                                  (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), courier_id))
+                    try:
+                        cell_g = sheet.cell(idx, 7).value  # Колонка G (✅)
+                        cell_h = sheet.cell(idx, 8).value  # Колонка H (❌)
                         
-                        # Обновляем статус в Google Sheets
-                        sheet.update_cell(idx, 6, "✅ Подтвержден")
-                        
-                        logger.info(f"✅ Курьер {full_name} подтвержден (строка {idx})")
-                        
-                    elif cell_h and "❌" in str(cell_h):
-                        # Отклоняем курьера
-                        c.execute('''UPDATE couriers 
-                                     SET status = 'rejected' 
-                                     WHERE id = ?''', (courier_id,))
-                        
-                        # Обновляем статус в Google Sheets
-                        sheet.update_cell(idx, 6, "❌ Отклонен")
-                        
-                        logger.info(f"❌ Курьер {full_name} отклонен (строка {idx})")
+                        # Проверяем, нажата ли кнопка подтверждения
+                        if cell_g and "✅" in str(cell_g):
+                            # Подтверждаем курьера
+                            c.execute('''UPDATE couriers 
+                                         SET status = 'confirmed', confirmed_at = ? 
+                                         WHERE id = ?''', 
+                                      (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), courier_id))
+                            
+                            # Обновляем статус в Google Sheets
+                            sheet.update_cell(idx, 6, "✅ Подтвержден")
+                            
+                            logger.info(f"✅ Курьер {full_name} подтвержден (строка {idx})")
+                            
+                        elif cell_h and "❌" in str(cell_h):
+                            # Отклоняем курьера
+                            c.execute('''UPDATE couriers 
+                                         SET status = 'rejected' 
+                                         WHERE id = ?''', (courier_id,))
+                            
+                            # Обновляем статус в Google Sheets
+                            sheet.update_cell(idx, 6, "❌ Отклонен")
+                            
+                            logger.info(f"❌ Курьер {full_name} отклонен (строка {idx})")
+                    except Exception as e:
+                        logger.error(f"Ошибка при проверке строки {idx}: {e}")
+                        continue
             
             conn.commit()
             
@@ -243,6 +302,7 @@ def start_sheet_monitoring():
     logger.info("✅ Мониторинг Google Sheets запущен")
 
 # ========== ФУНКЦИИ ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕЙ ==========
+# ========== ФУНКЦИИ ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕЙ ==========
 def is_registered(user_id):
     conn = get_db()
     c = conn.cursor()
@@ -254,7 +314,7 @@ def is_registered(user_id):
         logger.error(f"Ошибка в is_registered: {e}")
         return False
     finally:
-        conn.close()  # Закрываем только после использования
+        conn.close()
 
 def register_user(user_id, username, first_name, last_name):
     conn = get_db()
@@ -1678,5 +1738,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
