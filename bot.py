@@ -161,6 +161,14 @@ def check_pending_couriers():
             logger.error("❌ Нет доступа к Google Sheets")
             return
         
+        # Показываем все ожидающие курьеры в БД
+        conn_check = get_db()
+        c_check = conn_check.cursor()
+        c_check.execute("SELECT full_name, city, status, sheet_row FROM couriers WHERE status = 'pending'")
+        all_pending = c_check.fetchall()
+        logger.info(f"📋 Все pending курьеры в БД: {all_pending}")
+        conn_check.close()
+        
         # Получаем все записи из таблицы
         records = sheet.get_all_records()
         logger.info(f"🔍 Найдено записей в таблице: {len(records)}")
@@ -172,6 +180,7 @@ def check_pending_couriers():
             logger.info(f"📌 Строка {idx}: {full_name}, {city}")
             
             if not full_name or not city:
+                logger.info(f"   ⚠️ Пропущено: нет имени или города")
                 continue
             
             # Получаем значения (могут быть строкой или числом)
@@ -194,14 +203,18 @@ def check_pending_couriers():
             
             try:
                 # Проверяем, есть ли этот курьер в БД со статусом pending
-                c.execute('''SELECT id, recruiter_id FROM couriers 
+                c.execute('''SELECT id, recruiter_id, sheet_row FROM couriers 
                              WHERE full_name = ? AND city = ? AND status = 'pending' 
                              ORDER BY id DESC LIMIT 1''', (full_name, city))
                 courier = c.fetchone()
                 
                 if courier:
-                    courier_id, recruiter_id = courier
-                    logger.info(f"   Найден в БД: id={courier_id}, статус pending")
+                    courier_id, recruiter_id, sheet_row = courier
+                    logger.info(f"   ✅ Найден в БД: id={courier_id}, строка в таблице={sheet_row}")
+                    
+                    # Проверяем, совпадает ли номер строки
+                    if sheet_row != idx:
+                        logger.info(f"   ⚠️ Номер строки в БД ({sheet_row}) не совпадает с текущим ({idx})")
                     
                     # Проверяем значения
                     if принято == 1 and отклонено == 0:
@@ -217,8 +230,11 @@ def check_pending_couriers():
                         
                         # Сбрасываем ячейки
                         sheet.update_cell(idx, 7, 0)
+                        sheet.update_cell(idx, 8, 0)
                         
                         logger.info(f"✅ Курьер {full_name} подтвержден (строка {idx})")
+                        
+                        # Уведомляем рекрутера (добавим позже)
                         
                     elif отклонено == 1 and принято == 0:
                         logger.info(f"   ❌ ОБРАБОТКА: отклонение")
@@ -231,15 +247,31 @@ def check_pending_couriers():
                         sheet.update_cell(idx, 6, "❌ Отклонен")
                         
                         # Сбрасываем ячейки
+                        sheet.update_cell(idx, 7, 0)
                         sheet.update_cell(idx, 8, 0)
                         
                         logger.info(f"❌ Курьер {full_name} отклонен (строка {idx})")
+                        
+                    elif принято == 1 and отклонено == 1:
+                        logger.info(f"   ⚠️ Отмечены оба чекбокса! Ничего не делаем")
+                        
                     else:
                         logger.info(f"   ⏺ Нет изменений")
                         
                     conn.commit()
+                    
                 else:
-                    logger.info(f"   ⏺ Курьер не найден в БД или уже обработан")
+                    logger.info(f"   ⏺ Курьер не найден в БД со статусом pending")
+                    
+                    # Проверяем, может быть он уже обработан?
+                    c.execute('''SELECT status FROM couriers 
+                                 WHERE full_name = ? AND city = ? 
+                                 ORDER BY id DESC LIMIT 1''', (full_name, city))
+                    existing = c.fetchone()
+                    if existing:
+                        logger.info(f"   📌 Найден в БД со статусом: {existing[0]}")
+                    else:
+                        logger.info(f"   📌 Курьер вообще не найден в БД")
                         
             except Exception as e:
                 logger.error(f"Ошибка при обработке курьера {full_name}: {e}")
@@ -643,6 +675,12 @@ def add_courier(recruiter_id, full_name, city):
                       (row_number, recruiter_id, full_name, city))
             conn.commit()
             logger.info(f"✅ Курьер {full_name} добавлен, строка в таблице: {row_number}")
+            c.execute("SELECT * FROM couriers WHERE recruiter_id = ? ORDER BY id DESC LIMIT 1", (recruiter_id,))
+            last = c.fetchone()
+                if last:
+                    logger.info(f"   ✅ Проверка: последний добавленный в БД - {last[2]}, {last[3]}, статус {last[4]}")
+                else:
+                    logger.info(f"   ❌ Странно, запись не найдена в БД")
         
         return True, "Заявка на курьера отправлена на проверку! ✅"
     except Exception as e:
@@ -1702,6 +1740,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
