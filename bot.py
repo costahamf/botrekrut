@@ -34,6 +34,7 @@ CALCULATOR_URL = "https://eda.yandex.ru/partner/perf/samara/?utm_medium=cpc&utm_
 
 # ========== ПОСТОЯННОЕ ХРАНЕНИЕ ДАННЫХ ==========
 DB_CONN = None
+
 def init_database():
     """Инициализирует БД в памяти и загружает данные из файла"""
     global DB_CONN
@@ -115,7 +116,8 @@ def init_database():
     
     # Запускаем автосохранение
     start_auto_backup()
-    def get_db():
+
+def get_db():
     """Возвращает соединение с БД (не закрывает его глобально)"""
     global DB_CONN
     if DB_CONN is None:
@@ -146,7 +148,7 @@ def backup_database():
         logger.info("💾 Данные сохранены")
     except Exception as e:
         logger.error(f"Ошибка сохранения: {e}")
-        
+
 def start_auto_backup():
     """Запускает автосохранение в фоне"""
     def auto_backup_worker():
@@ -222,7 +224,6 @@ def is_registered(user_id):
     except Exception as e:
         logger.error(f"Ошибка в is_registered: {e}")
         return False
-    # НЕ закрываем conn - оно глобальное!
 
 def register_user(user_id, username, first_name, last_name):
     conn = get_db()
@@ -234,7 +235,6 @@ def register_user(user_id, username, first_name, last_name):
         conn.commit()
     except Exception as e:
         logger.error(f"Ошибка в register_user: {e}")
-    # НЕ закрываем conn
 
 def update_test_status(user_id, passed):
     conn = get_db()
@@ -510,7 +510,6 @@ def add_courier(recruiter_id, full_name, city):
     exists = c.fetchone()
     
     if exists:
-        conn.close()
         return False, "Курьер с такими данными уже записан"
     
     registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -524,8 +523,6 @@ def add_courier(recruiter_id, full_name, city):
     recruiter = c.fetchone()
     recruiter_name = recruiter[0] if recruiter else "Неизвестно"
     recruiter_username = recruiter[1] if recruiter else ""
-    
-    conn.close()
     
     # Отправляем в Google Sheets (в отдельном потоке, чтобы не тормозить бота)
     try:
@@ -549,49 +546,6 @@ def get_recruiter_couriers(recruiter_id):
                  WHERE recruiter_id = ? 
                  ORDER BY registered_at DESC''', (recruiter_id,))
     return c.fetchall()
-
-# ========== ФУНКЦИИ ДЛЯ УДАЛЕНИЯ СООБЩЕНИЙ ==========
-async def delete_previous_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Удаляет предыдущее сообщение бота"""
-    try:
-        if 'last_bot_message_id' in context.user_data and 'last_chat_id' in context.user_data:
-            await context.bot.delete_message(
-                chat_id=context.user_data['last_chat_id'],
-                message_id=context.user_data['last_bot_message_id']
-            )
-    except Exception:
-        pass
-
-async def send_and_track(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=None):
-    """Отправляет сообщение и сохраняет его ID"""
-    await delete_previous_message(update, context)
-    
-    if update.callback_query:
-        message = await update.callback_query.message.reply_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode
-        )
-    else:
-        message = await update.message.reply_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode
-        )
-    
-    context.user_data['last_bot_message_id'] = message.message_id
-    context.user_data['last_chat_id'] = message.chat_id
-    return message
-
-async def edit_and_track(query, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=None):
-    """Редактирует сообщение и сохраняет ID"""
-    await query.edit_message_text(
-        text,
-        reply_markup=reply_markup,
-        parse_mode=parse_mode
-    )
-    context.user_data['last_bot_message_id'] = query.message.message_id
-    context.user_data['last_chat_id'] = query.message.chat_id
 
 # ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1491,6 +1445,7 @@ async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += "─" * 20 + "\n"
         
         await send_and_track(update, context, text, parse_mode='Markdown')
+
 # ========== ТЕСТ GOOGLE SHEETS ==========
 async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Тестовая команда для проверки Google Sheets"""
@@ -1567,6 +1522,7 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
     except Exception as e:
         await update.message.reply_text(f"❌ Общая ошибка: {str(e)}")
+
 # ========== ЗАПУСК ==========
 def main():
     init_database()
@@ -1575,21 +1531,13 @@ def main():
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin_requests))
-    application.add_handler(CommandHandler("testgoogle", test_google))  # 👈 Добавь эту строку
+    application.add_handler(CommandHandler("testgoogle", test_google))
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(CallbackQueryHandler(next_question_callback, pattern='^next_question$'))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     logger.info("Бот запускается...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
-    
+
 if __name__ == '__main__':
     main()
-
-
-
-
-
-
-
-
