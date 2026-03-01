@@ -172,50 +172,57 @@ def check_pending_couriers():
         conn = get_db()
         c = conn.cursor()
         
-        # Получаем все записи из таблицы
-        records = sheet.get_all_records()
-        
-        for idx, record in enumerate(records, start=2):  # со 2 строки (1 - заголовки)
-            full_name = record.get('ФИО курьера', '')
-            city = record.get('Город', '')
-            status = record.get('Статус', '')
+        try:
+            # Получаем все записи из таблицы
+            records = sheet.get_all_records()
             
-            # Проверяем, есть ли этот курьер в БД со статусом pending
-            c.execute('''SELECT id, recruiter_id FROM couriers 
-                         WHERE full_name = ? AND city = ? AND status = 'pending' 
-                         ORDER BY id DESC LIMIT 1''', (full_name, city))
-            courier = c.fetchone()
+            for idx, record in enumerate(records, start=2):  # со 2 строки (1 - заголовки)
+                full_name = record.get('ФИО курьера', '')
+                city = record.get('Город', '')
+                
+                # Проверяем, есть ли этот курьер в БД со статусом pending
+                c.execute('''SELECT id, recruiter_id FROM couriers 
+                             WHERE full_name = ? AND city = ? AND status = 'pending' 
+                             ORDER BY id DESC LIMIT 1''', (full_name, city))
+                courier = c.fetchone()
+                
+                if courier:
+                    courier_id, recruiter_id = courier
+                    
+                    # Проверяем ячейки с кнопками (G и H)
+                    cell_g = sheet.cell(idx, 7).value  # Колонка G (✅)
+                    cell_h = sheet.cell(idx, 8).value  # Колонка H (❌)
+                    
+                    # Проверяем, нажата ли кнопка подтверждения
+                    if cell_g and "✅" in str(cell_g):
+                        # Подтверждаем курьера
+                        c.execute('''UPDATE couriers 
+                                     SET status = 'confirmed', confirmed_at = ? 
+                                     WHERE id = ?''', 
+                                  (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), courier_id))
+                        
+                        # Обновляем статус в Google Sheets
+                        sheet.update_cell(idx, 6, "✅ Подтвержден")
+                        
+                        logger.info(f"✅ Курьер {full_name} подтвержден (строка {idx})")
+                        
+                    elif cell_h and "❌" in str(cell_h):
+                        # Отклоняем курьера
+                        c.execute('''UPDATE couriers 
+                                     SET status = 'rejected' 
+                                     WHERE id = ?''', (courier_id,))
+                        
+                        # Обновляем статус в Google Sheets
+                        sheet.update_cell(idx, 6, "❌ Отклонен")
+                        
+                        logger.info(f"❌ Курьер {full_name} отклонен (строка {idx})")
             
-            if courier:
-                courier_id, recruiter_id = courier
-                
-                # Проверяем, не нажата ли кнопка подтверждения
-                cell_f = sheet.cell(idx, 6).value
-                cell_g = sheet.cell(idx, 7).value
-                
-                # Проверяем, изменился ли статус
-                if cell_f == "✅" or (cell_g and "✅" in str(cell_g)):
-                    # Подтверждаем курьера
-                    c.execute('''UPDATE couriers 
-                                 SET status = 'confirmed', confirmed_at = ? 
-                                 WHERE id = ?''', 
-                              (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), courier_id))
-                    
-                    # Уведомляем рекрутера
-                    # TODO: добавить уведомление
-                    
-                    logger.info(f"✅ Курьер {full_name} подтвержден (строка {idx})")
-                    
-                elif cell_f == "❌" or (cell_g and "❌" in str(cell_g)):
-                    # Отклоняем курьера
-                    c.execute('''UPDATE couriers 
-                                 SET status = 'rejected' 
-                                 WHERE id = ?''', (courier_id,))
-                    
-                    logger.info(f"❌ Курьер {full_name} отклонен (строка {idx})")
-        
-        conn.commit()
-        conn.close()
+            conn.commit()
+            
+        except Exception as e:
+            logger.error(f"Ошибка при обработке записей: {e}")
+        finally:
+            conn.close()
         
     except Exception as e:
         logger.error(f"Ошибка проверки статусов: {e}")
@@ -1671,4 +1678,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
