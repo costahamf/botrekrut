@@ -158,14 +158,18 @@ def check_pending_couriers():
     try:
         sheet = get_google_sheet()
         if not sheet:
+            logger.error("❌ Нет доступа к Google Sheets")
             return
         
         # Получаем все записи из таблицы
         records = sheet.get_all_records()
+        logger.info(f"🔍 Найдено записей в таблице: {len(records)}")
         
         for idx, record in enumerate(records, start=2):
             full_name = record.get('ФИО клиента', '')
             city = record.get('Город', '')
+            
+            logger.info(f"📌 Строка {idx}: {full_name}, {city}")
             
             if not full_name or not city:
                 continue
@@ -173,6 +177,8 @@ def check_pending_couriers():
             # Получаем значения (могут быть строкой или числом)
             принято = record.get('ПРИНЯТО', 0)
             отклонено = record.get('ОТКЛОНЕНО', 0)
+            
+            logger.info(f"   ПРИНЯТО={принято}, ОТКЛОНЕНО={отклонено}")
             
             # Преобразуем в число (если строка)
             try:
@@ -195,9 +201,11 @@ def check_pending_couriers():
                 
                 if courier:
                     courier_id, recruiter_id = courier
+                    logger.info(f"   Найден в БД: id={courier_id}, статус pending")
                     
                     # Проверяем значения
                     if принято == 1 and отклонено == 0:
+                        logger.info(f"   ✅ ОБРАБОТКА: подтверждение")
                         # Подтверждаем курьера
                         c.execute('''UPDATE couriers 
                                      SET status = 'confirmed', confirmed_at = ? 
@@ -213,6 +221,7 @@ def check_pending_couriers():
                         logger.info(f"✅ Курьер {full_name} подтвержден (строка {idx})")
                         
                     elif отклонено == 1 and принято == 0:
+                        logger.info(f"   ❌ ОБРАБОТКА: отклонение")
                         # Отклоняем курьера
                         c.execute('''UPDATE couriers 
                                      SET status = 'rejected' 
@@ -225,8 +234,12 @@ def check_pending_couriers():
                         sheet.update_cell(idx, 8, 0)
                         
                         logger.info(f"❌ Курьер {full_name} отклонен (строка {idx})")
+                    else:
+                        logger.info(f"   ⏺ Нет изменений")
                         
                     conn.commit()
+                else:
+                    logger.info(f"   ⏺ Курьер не найден в БД или уже обработан")
                         
             except Exception as e:
                 logger.error(f"Ошибка при обработке курьера {full_name}: {e}")
@@ -1689,6 +1702,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
