@@ -34,63 +34,6 @@ PERSONAL_ACCOUNT_URL = "https://partners-app.yandex.ru/team_ref/8647844ed8ee4d0e
 CALCULATOR_URL = "https://eda.yandex.ru/partner/perf/samara/?utm_medium=cpc&utm_source=yandex-hr&utm_campaign=%5BEDA%5DMX_Courier_RU-ALL-1M_Brand_search_NU%7C73792274&utm_term=49415175552%7C---autotargeting&utm_content=k50id%7C0100000049415175552_49415175552%7Ccid%7C73792274%7Cgid%7C5378729251%7Caid%7C15662855932%7Cadp%7Cno%7Cpos%7Cpremium1%7Csrc%7Csearch_none%7Cdvc%7Cdesktop%7Cmain&etext=2202.H1-umiWOxa1IhaqocPaUS69zT9wHAZdkgZEGqorPY5rJ_ebzkat1FDn2yZO3bEqDYssRPcp0IyJXzD9sTJXJ7293dG14ZXB1Z2VrdW1hemM.0d27564e0c3a01c61971ab0f3d5b481a3ae88ee1&yclid=14506292526793097215"
 
 # ========== ПОСТОЯННОЕ ХРАНЕНИЕ ДАННЫХ ==========
-DB_CONN = None
-
-def init_database():
-    """Инициализирует БД в файле (данные сохраняются)"""
-    global DB_CONN
-    DB_CONN = sqlite3.connect('users.db', check_same_thread=False)
-    c = DB_CONN.cursor()
-    
-    # Таблица пользователей
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (user_id INTEGER PRIMARY KEY,
-                  username TEXT,
-                  first_name TEXT,
-                  last_name TEXT,
-                  registration_date TEXT,
-                  balance REAL DEFAULT 0,
-                  test_passed INTEGER DEFAULT 0,
-                  test_attempts INTEGER DEFAULT 0,
-                  last_test_attempt TEXT)''')
-    
-    # Таблица заявок на вывод
-    c.execute('''CREATE TABLE IF NOT EXISTS withdrawals
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  user_id INTEGER,
-                  amount REAL,
-                  payment_method TEXT,
-                  payment_details TEXT,
-                  status TEXT DEFAULT 'pending',
-                  request_date TEXT)''')
-    
-    # Таблица тикетов поддержки
-    c.execute('''CREATE TABLE IF NOT EXISTS support_tickets
-                 (ticket_id TEXT PRIMARY KEY,
-                  user_id INTEGER,
-                  username TEXT,
-                  first_name TEXT,
-                  message TEXT,
-                  status TEXT DEFAULT 'open',
-                  created_at TEXT,
-                  answered_at TEXT,
-                  admin_reply TEXT)''')
-    
-    # Таблица курьеров
-    c.execute('''CREATE TABLE IF NOT EXISTS couriers
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  recruiter_id INTEGER,
-                  full_name TEXT,
-                  city TEXT,
-                  status TEXT DEFAULT 'pending',
-                  registered_at TEXT,
-                  confirmed_at TEXT,
-                  sheet_row INTEGER)''')
-    
-    DB_CONN.commit()
-    logger.info("✅ База данных инициализирована в файле users.db")
-
-# ========== ПОСТОЯННОЕ ХРАНЕНИЕ ДАННЫХ ==========
 def get_db():
     """Создает новое соединение с БД"""
     return sqlite3.connect('users.db', check_same_thread=False)
@@ -148,7 +91,7 @@ def init_database():
     conn.commit()
     conn.close()
     logger.info("✅ База данных инициализирована в файле users.db")
-
+    
 # ========== GOOGLE SHEETS ИНТЕГРАЦИЯ ==========
 def get_google_sheet():
     """Подключается к Google Sheets и возвращает рабочий лист"""
@@ -1738,6 +1681,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
