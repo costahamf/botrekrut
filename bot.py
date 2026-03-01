@@ -36,9 +36,9 @@ CALCULATOR_URL = "https://eda.yandex.ru/partner/perf/samara/?utm_medium=cpc&utm_
 DB_CONN = None
 
 def init_database():
-    """Инициализирует БД в памяти и загружает данные из файла"""
+    """Инициализирует БД в файле (данные сохраняются)"""
     global DB_CONN
-    DB_CONN = sqlite3.connect(':memory:', check_same_thread=False)
+    DB_CONN = sqlite3.connect('users.db', check_same_thread=False)
     c = DB_CONN.cursor()
     
     # Таблица пользователей
@@ -83,85 +83,15 @@ def init_database():
                   city TEXT,
                   registered_at TEXT)''')
     
-    # Загружаем сохраненные данные
-    if os.path.exists('backup.json'):
-        try:
-            with open('backup.json', 'r') as f:
-                backup = json.load(f)
-            
-            # Восстанавливаем users
-            for row in backup.get('users', []):
-                c.execute('''INSERT OR REPLACE INTO users 
-                             VALUES (?,?,?,?,?,?,?,?,?)''', row)
-            
-            # Восстанавливаем withdrawals
-            for row in backup.get('withdrawals', []):
-                c.execute('''INSERT INTO withdrawals 
-                             VALUES (?,?,?,?,?,?,?)''', row)
-            
-            # Восстанавливаем tickets
-            for row in backup.get('tickets', []):
-                c.execute('''INSERT INTO support_tickets 
-                             VALUES (?,?,?,?,?,?,?,?,?)''', row)
-            
-            # Восстанавливаем couriers
-            for row in backup.get('couriers', []):
-                c.execute('''INSERT INTO couriers 
-                             VALUES (?,?,?,?,?)''', row)
-            
-            DB_CONN.commit()
-            logger.info(f"✅ Загружены данные из backup.json")
-        except Exception as e:
-            logger.error(f"Ошибка загрузки backup: {e}")
-    
-    # Запускаем автосохранение
-    start_auto_backup()
+    DB_CONN.commit()
+    logger.info("✅ База данных инициализирована в файле users.db")
 
 def get_db():
-    """Возвращает соединение с БД (не закрывает его глобально)"""
+    """Возвращает соединение с БД"""
     global DB_CONN
     if DB_CONN is None:
         init_database()
     return DB_CONN
-
-def backup_database():
-    """Сохраняет все данные в JSON"""
-    try:
-        conn = get_db()
-        if conn is None:
-            logger.error("Нет соединения с БД")
-            return
-            
-        c = conn.cursor()
-        
-        backup = {
-            'users': c.execute("SELECT * FROM users").fetchall(),
-            'withdrawals': c.execute("SELECT * FROM withdrawals").fetchall(),
-            'tickets': c.execute("SELECT * FROM support_tickets").fetchall(),
-            'couriers': c.execute("SELECT * FROM couriers").fetchall(),
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        with open('backup.json', 'w') as f:
-            json.dump(backup, f, default=str)
-        
-        logger.info("💾 Данные сохранены")
-    except Exception as e:
-        logger.error(f"Ошибка сохранения: {e}")
-
-def start_auto_backup():
-    """Запускает автосохранение в фоне"""
-    def auto_backup_worker():
-        while True:
-            import time
-            time.sleep(300)  # 5 минут
-            backup_database()
-    
-    thread = threading.Thread(target=auto_backup_worker, daemon=True)
-    thread.start()
-
-# Сохраняем при выходе
-atexit.register(backup_database)
 
 # ========== GOOGLE SHEETS ИНТЕГРАЦИЯ ==========
 def get_google_sheet():
@@ -825,6 +755,7 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode='Markdown'
     )
     
+    # КНОПКИ ДЛЯ АДМИНА
     keyboard = [
         [InlineKeyboardButton("📨 Ответить", callback_data=f'admin_reply_{ticket_id}')],
         [InlineKeyboardButton("✅ Закрыть", callback_data=f'admin_close_{ticket_id}')]
@@ -1441,7 +1372,6 @@ async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"📅 {w[7]}\n"
             text += "──────────────────────\n"
     
-    # Отправляем без Markdown, простым текстом
     await update.message.reply_text(text)
 
 # ========== ТЕСТ GOOGLE SHEETS ==========
@@ -1454,7 +1384,6 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔄 Тестирую подключение к Google Sheets...")
     
     try:
-        # Проверяем переменные окружения
         creds_json = os.environ.get('GOOGLE_CREDS_JSON')
         sheet_id = os.environ.get('GOOGLE_SHEET_ID')
         
@@ -1468,10 +1397,8 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(f"✅ Переменные найдены\nID таблицы: {sheet_id}")
         
-        # Пробуем подключиться
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
         
-        # Парсим JSON
         try:
             creds_dict = json.loads(creds_json)
             await update.message.reply_text("✅ JSON распарсен успешно")
@@ -1479,7 +1406,6 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Ошибка парсинга JSON: {str(e)}")
             return
         
-        # Создаем credentials
         try:
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             await update.message.reply_text("✅ Credentials созданы")
@@ -1487,7 +1413,6 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Ошибка создания credentials: {str(e)}")
             return
         
-        # Авторизуемся
         try:
             client = gspread.authorize(creds)
             await update.message.reply_text("✅ Авторизация в Google Sheets успешна")
@@ -1495,7 +1420,6 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Ошибка авторизации: {str(e)}")
             return
         
-        # Открываем таблицу
         try:
             sheet = client.open_by_key(sheet_id).sheet1
             await update.message.reply_text("✅ Таблица открыта успешно")
@@ -1503,7 +1427,6 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Ошибка открытия таблицы: {str(e)}")
             return
         
-        # Пробуем записать тестовые данные
         try:
             test_row = [
                 datetime.now().strftime("%d.%m.%Y %H:%M"),
@@ -1539,6 +1462,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
