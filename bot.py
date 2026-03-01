@@ -325,13 +325,19 @@ def register_user(user_id, username, first_name, last_name):
     finally:
         conn.close()
 
-def update_test_status(user_id, passed):
+ddef update_test_status(user_id, passed):
     conn = get_db()
     c = conn.cursor()
     try:
+        logger.info(f"📝 Обновление test_passed для user_id={user_id} на {1 if passed else 0}")
         c.execute("UPDATE users SET test_passed = ?, last_test_attempt = ? WHERE user_id = ?",
                   (1 if passed else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
         conn.commit()
+        
+        # Проверяем, обновилось ли
+        c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
+        new_value = c.fetchone()
+        logger.info(f"   ✅ После обновления test_passed={new_value[0] if new_value else None}")
     except Exception as e:
         logger.error(f"Ошибка в update_test_status: {e}")
     finally:
@@ -737,6 +743,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
     result = c.fetchone()
     test_passed = result[0] if result else 0
+    logger.info(f"👤 Пользователь {user_id} test_passed={test_passed}")
+    if test_passed == 1:
+        logger.info(f"   ✅ Тест пройден, показываем полное меню")
+    else:
+        logger.info(f"   ❌ Тест не пройден, показываем ограниченное меню")
     
     if test_passed == 1:
         keyboard = [
@@ -1767,6 +1778,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
