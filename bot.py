@@ -668,7 +668,7 @@ def add_courier(recruiter_id, full_name, city):
             recruiter_name, recruiter_username, full_name, city
         )
         
-            if success and row_number:
+        if success and row_number:
             # Обновляем номер строки в БД
             c.execute('''UPDATE couriers SET sheet_row = ? 
                          WHERE recruiter_id = ? AND full_name = ? AND city = ? AND status = 'pending' ''',
@@ -1742,6 +1742,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
