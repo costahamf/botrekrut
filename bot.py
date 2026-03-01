@@ -575,45 +575,76 @@ async def show_test_question(query, context):
     )
 
 async def handle_test_answer(query, user_id, context):
-    answer_index = int(query.data.replace('answer_', ''))
-    current = context.user_data.get('test_current', 0)
-    questions = context.user_data.get('test_questions', [])
-    answers = context.user_data.get('test_answers', [])
-    
-    correct = questions[current]['correct']
-    is_correct = (answer_index == correct)
-    answers.append(is_correct)
-    context.user_data['test_answers'] = answers
-    
-    if is_correct:
-        text = "✅ *Верно!*"
-    else:
-        correct_text = questions[current]['options'][correct]
-        text = f"❌ *Неверно!*\nПравильный ответ: *{correct_text}*"
-    
-    context.user_data['test_current'] = current + 1
-    
-    if context.user_data['test_current'] >= len(questions):
-        await finish_test(query, context)
-        return
-    
-    keyboard = [[InlineKeyboardButton("➡️ Далее", callback_data='next_question')]]
-    await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    """Обработка ответа на вопрос теста"""
+    try:
+        answer_index = int(query.data.replace('answer_', ''))
+        current = context.user_data.get('test_current', 0)
+        questions = context.user_data.get('test_questions', [])
+        answers = context.user_data.get('test_answers', [])
+        
+        # Проверяем, что вопросы существуют
+        if not questions or current >= len(questions):
+            await query.edit_message_text("❌ Ошибка теста. Начните заново.")
+            return
+        
+        # Получаем текущий вопрос
+        question = questions[current]
+        correct = question['correct']
+        is_correct = (answer_index == correct)
+        answers.append(is_correct)
+        context.user_data['test_answers'] = answers
+        
+        # Формируем текст ответа
+        if is_correct:
+            text = "✅ *Верно!*"
+        else:
+            correct_text = question['options'][correct]
+            text = f"❌ *Неверно!*\nПравильный ответ: *{correct_text}*"
+        
+        # Переходим к следующему вопросу
+        context.user_data['test_current'] = current + 1
+        
+        # Проверяем, не закончился ли тест
+        if context.user_data['test_current'] >= len(questions):
+            # Тест завершен
+            await finish_test(query, context)
+            return
+        
+        # Показываем результат и кнопку "Далее"
+        keyboard = [[InlineKeyboardButton("➡️ Далее", callback_data='next_question')]]
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка в handle_test_answer: {e}")
+        await query.edit_message_text("❌ Произошла ошибка. Начните тест заново.")
 
 async def next_question_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик для кнопки 'Далее'"""
     query = update.callback_query
     await query.answer()
     
-    if 'test_current' not in context.user_data:
-        await query.edit_message_text("❌ Тест не найден. Начните заново.")
-        return
-    
-    await show_test_question(query, context)
-
+    try:
+        # Проверяем, есть ли активный тест
+        if 'test_current' not in context.user_data or 'test_questions' not in context.user_data:
+            await query.edit_message_text(
+                "❌ Тест не найден. Начните заново.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📝 Начать тест", callback_data='take_test')
+                ]])
+            )
+            return
+        
+        # Показываем следующий вопрос
+        await show_test_question(query, context)
+        
+    except Exception as e:
+        logger.error(f"Ошибка в next_question_callback: {e}")
+        await query.edit_message_text("❌ Произошла ошибка. Начните тест заново.")
+        
 async def finish_test(query, context):
     answers = context.user_data.get('test_answers', [])
     correct_count = sum(1 for a in answers if a)
@@ -1054,3 +1085,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
