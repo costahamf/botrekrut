@@ -238,57 +238,72 @@ def start_sheet_monitoring():
 # ========== ФУНКЦИИ ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕЙ ==========
 def is_registered(user_id):
     conn = get_db()
+    c = conn.cursor()
     try:
-        c = conn.cursor()
         c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
         result = c.fetchone()
         return result is not None
     except Exception as e:
         logger.error(f"Ошибка в is_registered: {e}")
         return False
+    finally:
+        conn.close()  # Закрываем только после использования
 
 def register_user(user_id, username, first_name, last_name):
     conn = get_db()
+    c = conn.cursor()
     try:
-        c = conn.cursor()
         registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         c.execute("INSERT OR IGNORE INTO users (user_id, username, first_name, last_name, registration_date, balance) VALUES (?, ?, ?, ?, ?, 0)",
                   (user_id, username, first_name, last_name, registration_date))
         conn.commit()
     except Exception as e:
         logger.error(f"Ошибка в register_user: {e}")
+    finally:
+        conn.close()
 
 def update_test_status(user_id, passed):
     conn = get_db()
     c = conn.cursor()
-    c.execute("UPDATE users SET test_passed = ?, last_test_attempt = ? WHERE user_id = ?",
-              (1 if passed else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
-    conn.commit()
+    try:
+        c.execute("UPDATE users SET test_passed = ?, last_test_attempt = ? WHERE user_id = ?",
+                  (1 if passed else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка в update_test_status: {e}")
+    finally:
+        conn.close()
 
 def can_take_test(user_id):
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT test_passed, last_test_attempt FROM users WHERE user_id = ?", (user_id,))
-    result = c.fetchone()
-    
-    if not result:
-        return True, 0
-    
-    test_passed, last_attempt_str = result
-    
-    if test_passed == 1:
-        return True, 0
-    
-    if last_attempt_str:
-        last_attempt = datetime.strptime(last_attempt_str, "%Y-%m-%d %H:%M:%S")
-        now = datetime.now()
-        time_diff = now - last_attempt
+    try:
+        c.execute("SELECT test_passed, last_test_attempt FROM users WHERE user_id = ?", (user_id,))
+        result = c.fetchone()
         
-        if time_diff < timedelta(minutes=30):
-            remaining = 30 - int(time_diff.total_seconds() / 60)
-            return False, remaining
-    
-    return True, 0
+        if not result:
+            return True, 0
+        
+        test_passed, last_attempt_str = result
+        
+        if test_passed == 1:
+            return True, 0
+        
+        if last_attempt_str:
+            last_attempt = datetime.strptime(last_attempt_str, "%Y-%m-%d %H:%M:%S")
+            now = datetime.now()
+            time_diff = now - last_attempt
+            
+            if time_diff < timedelta(minutes=30):
+                remaining = 30 - int(time_diff.total_seconds() / 60)
+                return False, remaining
+        
+        return True, 0
+    except Exception as e:
+        logger.error(f"Ошибка в can_take_test: {e}")
+        return True, 0
+    finally:
+        conn.close()
 
 # ========== ТЕСТОВЫЕ ВОПРОСЫ ==========
 TEST_QUESTIONS = [
@@ -439,141 +454,186 @@ async def edit_and_track(query, context: ContextTypes.DEFAULT_TYPE, text: str, r
 
 # ========== ФУНКЦИИ ПОДДЕРЖКИ ==========
 def create_support_ticket(user_id, username, first_name, message):
-    """Создает новый тикет поддержки"""
     conn = get_db()
     c = conn.cursor()
-    ticket_id = str(uuid.uuid4())[:8]
-    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    c.execute('''INSERT INTO support_tickets 
-                 (ticket_id, user_id, username, first_name, message, created_at) 
-                 VALUES (?, ?, ?, ?, ?, ?)''',
-              (ticket_id, user_id, username, first_name, message, created_at))
-    
-    conn.commit()
-    return ticket_id
+    try:
+        ticket_id = str(uuid.uuid4())[:8]
+        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute('''INSERT INTO support_tickets 
+                     (ticket_id, user_id, username, first_name, message, created_at) 
+                     VALUES (?, ?, ?, ?, ?, ?)''',
+                  (ticket_id, user_id, username, first_name, message, created_at))
+        conn.commit()
+        return ticket_id
+    except Exception as e:
+        logger.error(f"Ошибка в create_support_ticket: {e}")
+        return None
+    finally:
+        conn.close()
 
 def get_open_tickets():
     conn = get_db()
     c = conn.cursor()
-    c.execute('''SELECT ticket_id, user_id, username, first_name, message, created_at 
-                 FROM support_tickets 
-                 WHERE status = 'open' 
-                 ORDER BY created_at ASC''')
-    return c.fetchall()
+    try:
+        c.execute('''SELECT ticket_id, user_id, username, first_name, message, created_at 
+                     FROM support_tickets 
+                     WHERE status = 'open' 
+                     ORDER BY created_at ASC''')
+        return c.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка в get_open_tickets: {e}")
+        return []
+    finally:
+        conn.close()
 
 def get_ticket(ticket_id):
     conn = get_db()
     c = conn.cursor()
-    c.execute('''SELECT * FROM support_tickets WHERE ticket_id = ?''', (ticket_id,))
-    return c.fetchone()
+    try:
+        c.execute('''SELECT * FROM support_tickets WHERE ticket_id = ?''', (ticket_id,))
+        return c.fetchone()
+    except Exception as e:
+        logger.error(f"Ошибка в get_ticket: {e}")
+        return None
+    finally:
+        conn.close()
 
 def close_ticket(ticket_id, admin_reply):
     conn = get_db()
     c = conn.cursor()
-    answered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute('''UPDATE support_tickets 
-                 SET status = 'closed', answered_at = ?, admin_reply = ? 
-                 WHERE ticket_id = ?''',
-              (answered_at, admin_reply, ticket_id))
-    conn.commit()
+    try:
+        answered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute('''UPDATE support_tickets 
+                     SET status = 'closed', answered_at = ?, admin_reply = ? 
+                     WHERE ticket_id = ?''',
+                  (answered_at, admin_reply, ticket_id))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка в close_ticket: {e}")
+    finally:
+        conn.close()
 
 # ========== ФУНКЦИИ ДЛЯ ВЫВОДА ==========
 def get_user_balance(user_id):
-    """Получает баланс пользователя"""
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-    result = c.fetchone()
-    return result[0] if result else 0
+    try:
+        c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+        result = c.fetchone()
+        return result[0] if result else 0
+    except Exception as e:
+        logger.error(f"Ошибка в get_user_balance: {e}")
+        return 0
+    finally:
+        conn.close()
 
 def create_withdrawal_request(user_id, amount, method, details):
-    """Создает заявку на вывод"""
     conn = get_db()
     c = conn.cursor()
-    request_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute('''INSERT INTO withdrawals 
-                 (user_id, amount, payment_method, payment_details, request_date, status) 
-                 VALUES (?, ?, ?, ?, ?, 'pending')''',
-              (user_id, amount, method, details, request_date))
-    request_id = c.lastrowid
-    conn.commit()
-    return request_id
+    try:
+        request_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute('''INSERT INTO withdrawals 
+                     (user_id, amount, payment_method, payment_details, request_date, status) 
+                     VALUES (?, ?, ?, ?, ?, 'pending')''',
+                  (user_id, amount, method, details, request_date))
+        request_id = c.lastrowid
+        conn.commit()
+        return request_id
+    except Exception as e:
+        logger.error(f"Ошибка в create_withdrawal_request: {e}")
+        return None
+    finally:
+        conn.close()
 
 def get_pending_withdrawals():
-    """Получает все ожидающие заявки на вывод"""
     conn = get_db()
     c = conn.cursor()
-    c.execute('''SELECT w.id, w.user_id, u.first_name, u.username, 
-                        w.amount, w.payment_method, w.payment_details, w.request_date
-                 FROM withdrawals w
-                 JOIN users u ON w.user_id = u.user_id
-                 WHERE w.status = 'pending'
-                 ORDER BY w.request_date ASC''')
-    return c.fetchall()
+    try:
+        c.execute('''SELECT w.id, w.user_id, u.first_name, u.username, 
+                            w.amount, w.payment_method, w.payment_details, w.request_date
+                     FROM withdrawals w
+                     JOIN users u ON w.user_id = u.user_id
+                     WHERE w.status = 'pending'
+                     ORDER BY w.request_date ASC''')
+        return c.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка в get_pending_withdrawals: {e}")
+        return []
+    finally:
+        conn.close()
 
 def confirm_withdrawal(request_id):
-    """Подтверждает заявку на вывод"""
     conn = get_db()
     c = conn.cursor()
-    c.execute("UPDATE withdrawals SET status = 'completed' WHERE id = ?", (request_id,))
-    conn.commit()
-
+    try:
+        c.execute("UPDATE withdrawals SET status = 'completed' WHERE id = ?", (request_id,))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка в confirm_withdrawal: {e}")
+    finally:
+        conn.close()
 # ========== ФУНКЦИИ ДЛЯ КУРЬЕРОВ ==========
 def add_courier(recruiter_id, full_name, city):
-    """Добавляет курьера в базу и Google Sheets"""
     conn = get_db()
     c = conn.cursor()
-    
-    # Проверяем, нет ли уже такого курьера у этого рекрутера
-    c.execute('''SELECT id FROM couriers 
-                 WHERE recruiter_id = ? AND full_name = ? AND city = ? AND status = 'confirmed' ''',
-              (recruiter_id, full_name, city))
-    exists = c.fetchone()
-    
-    if exists:
-        return False, "Курьер с такими данными уже подтвержден"
-    
-    # Добавляем в БД со статусом pending
-    registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute('''INSERT INTO couriers 
-                 (recruiter_id, full_name, city, status, registered_at)
-                 VALUES (?, ?, ?, ?, ?)''',
-              (recruiter_id, full_name, city, 'pending', registered_at))
-    conn.commit()
-    
-    # Получаем данные рекрутера для Google Sheets
-    c.execute("SELECT first_name, username FROM users WHERE user_id = ?", (recruiter_id,))
-    recruiter = c.fetchone()
-    recruiter_name = recruiter[0] if recruiter else "Неизвестно"
-    recruiter_username = recruiter[1] if recruiter else ""
-    
-    # Отправляем в Google Sheets с кнопками
-    success, row_number = add_courier_to_google_sheet(
-        recruiter_name, recruiter_username, full_name, city
-    )
-    
-    if success and row_number:
-        # Обновляем номер строки в БД
-        c.execute('''UPDATE couriers SET sheet_row = ? 
-                     WHERE recruiter_id = ? AND full_name = ? AND city = ? AND status = 'pending' ''',
-                  (row_number, recruiter_id, full_name, city))
+    try:
+        # Проверяем, нет ли уже такого курьера у этого рекрутера
+        c.execute('''SELECT id FROM couriers 
+                     WHERE recruiter_id = ? AND full_name = ? AND city = ? AND status = 'confirmed' ''',
+                  (recruiter_id, full_name, city))
+        exists = c.fetchone()
+        
+        if exists:
+            return False, "Курьер с такими данными уже подтвержден"
+        
+        # Добавляем в БД со статусом pending
+        registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute('''INSERT INTO couriers 
+                     (recruiter_id, full_name, city, status, registered_at)
+                     VALUES (?, ?, ?, ?, ?)''',
+                  (recruiter_id, full_name, city, 'pending', registered_at))
         conn.commit()
-        logger.info(f"✅ Курьер {full_name} добавлен, строка в таблице: {row_number}")
-    
-    conn.close()
-    
-    return True, "Заявка на курьера отправлена на проверку! ✅"
+        
+        # Получаем данные рекрутера для Google Sheets
+        c.execute("SELECT first_name, username FROM users WHERE user_id = ?", (recruiter_id,))
+        recruiter = c.fetchone()
+        recruiter_name = recruiter[0] if recruiter else "Неизвестно"
+        recruiter_username = recruiter[1] if recruiter else ""
+        
+        # Отправляем в Google Sheets с кнопками
+        success, row_number = add_courier_to_google_sheet(
+            recruiter_name, recruiter_username, full_name, city
+        )
+        
+        if success and row_number:
+            # Обновляем номер строки в БД
+            c.execute('''UPDATE couriers SET sheet_row = ? 
+                         WHERE recruiter_id = ? AND full_name = ? AND city = ? AND status = 'pending' ''',
+                      (row_number, recruiter_id, full_name, city))
+            conn.commit()
+            logger.info(f"✅ Курьер {full_name} добавлен, строка в таблице: {row_number}")
+        
+        return True, "Заявка на курьера отправлена на проверку! ✅"
+    except Exception as e:
+        logger.error(f"Ошибка в add_courier: {e}")
+        return False, f"Ошибка: {str(e)}"
+    finally:
+        conn.close()
 
 def get_recruiter_couriers(recruiter_id):
-    """Получает всех курьеров рекрутера"""
     conn = get_db()
     c = conn.cursor()
-    c.execute('''SELECT full_name, city, status, registered_at, confirmed_at 
-                 FROM couriers 
-                 WHERE recruiter_id = ? 
-                 ORDER BY registered_at DESC''', (recruiter_id,))
-    return c.fetchall()
+    try:
+        c.execute('''SELECT full_name, city, status, registered_at, confirmed_at 
+                     FROM couriers 
+                     WHERE recruiter_id = ? 
+                     ORDER BY registered_at DESC''', (recruiter_id,))
+        return c.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка в get_recruiter_couriers: {e}")
+        return []
+    finally:
+        conn.close()
 
 # ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1611,3 +1671,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
