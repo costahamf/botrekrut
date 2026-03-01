@@ -34,7 +34,6 @@ CALCULATOR_URL = "https://eda.yandex.ru/partner/perf/samara/?utm_medium=cpc&utm_
 
 # ========== ПОСТОЯННОЕ ХРАНЕНИЕ ДАННЫХ ==========
 DB_CONN = None
-
 def init_database():
     """Инициализирует БД в памяти и загружает данные из файла"""
     global DB_CONN
@@ -116,7 +115,7 @@ def init_database():
     
     # Запускаем автосохранение
     start_auto_backup()
-def get_db():
+    def get_db():
     """Возвращает соединение с БД (не закрывает его глобально)"""
     global DB_CONN
     if DB_CONN is None:
@@ -1586,6 +1585,7 @@ def main():
     
 if __name__ == '__main__':
     main()
+
 
 
 
