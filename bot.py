@@ -1,11 +1,9 @@
-import json
 import logging
 import sqlite3
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 import os
-import sys
 
 # Настройка логирования
 logging.basicConfig(
@@ -31,7 +29,6 @@ def init_database():
     conn = sqlite3.connect('/data/users.db')
     c = conn.cursor()
     
-    # Таблица пользователей
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (user_id INTEGER PRIMARY KEY,
                   username TEXT,
@@ -42,7 +39,6 @@ def init_database():
                   test_passed INTEGER DEFAULT 0,
                   withdrawal_info TEXT)''')
     
-    # Таблица заявок на вывод
     c.execute('''CREATE TABLE IF NOT EXISTS withdrawals
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   user_id INTEGER,
@@ -123,6 +119,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_info_section(query)
     elif data == 'check_balance':
         await check_balance(query, user_id)
+    elif data.startswith('withdrawal_'):
+        await process_withdrawal_option(query, user_id, context)
     elif data == 'back_to_main':
         await back_to_main(query)
     elif data == 'back_to_info':
@@ -171,6 +169,7 @@ async def show_info_section(query):
 
 Будьте внимательны при отборе кандидатов и контролируйте их работу на начальном этапе.
         """,
+        
         'ad_marking': """
 📢 *Соблюдайте требования по маркировке рекламы*
 
@@ -196,6 +195,7 @@ async def show_info_section(query):
 
 Соблюдение этих правил защитит вас от блокировки и штрафов!
         """,
+        
         'warning': """
 🚨 *ВНИМАНИЕ!*
 
@@ -209,6 +209,7 @@ async def show_info_section(query):
 
 Будьте честны с кандидатами и сервисом! Только честная работа гарантирует стабильный доход и долгосрочное сотрудничество.
         """,
+        
         'documents': """
 📄 *Документы для оформления курьера*
 
@@ -259,6 +260,7 @@ async def show_info_section(query):
 • Дактилоскопия
 • ИНН, СНИЛС (если есть)
         """,
+        
         'target_action': """
 🎯 *Целевое действие (ЦД)*
 
@@ -276,6 +278,7 @@ async def show_info_section(query):
 
 Стремитесь привлекать мотивированных кандидатов, настроенных на долгосрочную работу!
         """,
+        
         'payments': """
 💰 *Когда приходят выплаты?*
 
@@ -290,6 +293,7 @@ async def show_info_section(query):
 
 Работайте на качество, а не на количество! Только так вы построите стабильный доход.
         """,
+        
         'communication': """
 💬 *Как общаться с кандидатом*
 
@@ -313,6 +317,7 @@ async def show_info_section(query):
 • Если нужна стабильность — расскажите про фиксированный доход
 • Если важно больше времени проводить с семьёй — покажите, как сотрудничество с Яндекс Едой позволяет сочетать доход и личную жизнь
         """,
+        
         'motivation': """
 📈 *Мотивация и доход курьера*
 
@@ -641,21 +646,16 @@ async def admin_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Основная функция для запуска
 def main():
-    """Запуск бота"""
-    # Инициализация базы данных
     init_database()
     
-    # Создание приложения
     application = Application.builder().token(TOKEN).build()
     
-    # Регистрация обработчиков
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin_requests))
     application.add_handler(CommandHandler("confirm", admin_confirm))
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Запуск бота
     logger.info("Бот запущен и готов к работе")
     application.run_polling()
 
