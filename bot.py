@@ -7,6 +7,9 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 import traceback
 import random
 import uuid
+import os
+import threading
+import atexit
 
 # Настройка логирования
 logging.basicConfig(
@@ -27,48 +30,178 @@ PERSONAL_ACCOUNT_URL = "https://partners-app.yandex.ru/team_ref/8647844ed8ee4d0e
 # URL для калькулятора дохода
 CALCULATOR_URL = "https://eda.yandex.ru/partner/perf/samara/?utm_medium=cpc&utm_source=yandex-hr&utm_campaign=%5BEDA%5DMX_Courier_RU-ALL-1M_Brand_search_NU%7C73792274&utm_term=49415175552%7C---autotargeting&utm_content=k50id%7C0100000049415175552_49415175552%7Ccid%7C73792274%7Cgid%7C5378729251%7Caid%7C15662855932%7Cadp%7Cno%7Cpos%7Cpremium1%7Csrc%7Csearch_none%7Cdvc%7Cdesktop%7Cmain&etext=2202.H1-umiWOxa1IhaqocPaUS69zT9wHAZdkgZEGqorPY5rJ_ebzkat1FDn2yZO3bEqDYssRPcp0IyJXzD9sTJXJ7293dG14ZXB1Z2VrdW1hemM.0d27564e0c3a01c61971ab0f3d5b481a3ae88ee1&yclid=14506292526793097215"
 
-# ========== ФУНКЦИИ ДЛЯ УДАЛЕНИЯ СООБЩЕНИЙ ==========
-async def delete_previous_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Удаляет предыдущее сообщение бота"""
+# ========== ПОСТОЯННОЕ ХРАНЕНИЕ ДАННЫХ ==========
+DB_CONN = None
+
+def init_database():
+    """Инициализирует БД в памяти и загружает данные из файла"""
+    global DB_CONN
+    DB_CONN = sqlite3.connect(':memory:', check_same_thread=False)
+    c = DB_CONN.cursor()
+    
+    # Таблица пользователей
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (user_id INTEGER PRIMARY KEY,
+                  username TEXT,
+                  first_name TEXT,
+                  last_name TEXT,
+                  registration_date TEXT,
+                  balance REAL DEFAULT 0,
+                  test_passed INTEGER DEFAULT 0,
+                  test_attempts INTEGER DEFAULT 0,
+                  last_test_attempt TEXT)''')
+    
+    # Таблица заявок на вывод
+    c.execute('''CREATE TABLE IF NOT EXISTS withdrawals
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id INTEGER,
+                  amount REAL,
+                  payment_method TEXT,
+                  payment_details TEXT,
+                  status TEXT DEFAULT 'pending',
+                  request_date TEXT)''')
+    
+    # Таблица тикетов поддержки
+    c.execute('''CREATE TABLE IF NOT EXISTS support_tickets
+                 (ticket_id TEXT PRIMARY KEY,
+                  user_id INTEGER,
+                  username TEXT,
+                  first_name TEXT,
+                  message TEXT,
+                  status TEXT DEFAULT 'open',
+                  created_at TEXT,
+                  answered_at TEXT,
+                  admin_reply TEXT)''')
+    
+    # Таблица курьеров
+    c.execute('''CREATE TABLE IF NOT EXISTS couriers
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  recruiter_id INTEGER,
+                  full_name TEXT,
+                  city TEXT,
+                  registered_at TEXT)''')
+    
+    # Загружаем сохраненные данные
+    if os.path.exists('backup.json'):
+        try:
+            with open('backup.json', 'r') as f:
+                backup = json.load(f)
+            
+            # Восстанавливаем users
+            for row in backup.get('users', []):
+                c.execute('''INSERT OR REPLACE INTO users 
+                             VALUES (?,?,?,?,?,?,?,?,?)''', row)
+            
+            # Восстанавливаем withdrawals
+            for row in backup.get('withdrawals', []):
+                c.execute('''INSERT INTO withdrawals 
+                             VALUES (?,?,?,?,?,?,?)''', row)
+            
+            # Восстанавливаем tickets
+            for row in backup.get('tickets', []):
+                c.execute('''INSERT INTO support_tickets 
+                             VALUES (?,?,?,?,?,?,?,?,?)''', row)
+            
+            # Восстанавливаем couriers
+            for row in backup.get('couriers', []):
+                c.execute('''INSERT INTO couriers 
+                             VALUES (?,?,?,?,?)''', row)
+            
+            DB_CONN.commit()
+            logger.info(f"✅ Загружены данные из backup.json")
+        except Exception as e:
+            logger.error(f"Ошибка загрузки backup: {e}")
+    
+    # Запускаем автосохранение
+    start_auto_backup()
+
+def get_db():
+    global DB_CONN
+    if DB_CONN is None:
+        init_database()
+    return DB_CONN
+
+def backup_database():
+    """Сохраняет все данные в JSON"""
     try:
-        if 'last_bot_message_id' in context.user_data and 'last_chat_id' in context.user_data:
-            await context.bot.delete_message(
-                chat_id=context.user_data['last_chat_id'],
-                message_id=context.user_data['last_bot_message_id']
-            )
-    except Exception:
-        pass
+        conn = get_db()
+        c = conn.cursor()
+        
+        backup = {
+            'users': c.execute("SELECT * FROM users").fetchall(),
+            'withdrawals': c.execute("SELECT * FROM withdrawals").fetchall(),
+            'tickets': c.execute("SELECT * FROM support_tickets").fetchall(),
+            'couriers': c.execute("SELECT * FROM couriers").fetchall(),
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        with open('backup.json', 'w') as f:
+            json.dump(backup, f, default=str)
+        
+        logger.info("💾 Данные сохранены")
+    except Exception as e:
+        logger.error(f"Ошибка сохранения: {e}")
 
-async def send_and_track(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=None):
-    """Отправляет сообщение и сохраняет его ID"""
-    await delete_previous_message(update, context)
+def start_auto_backup():
+    """Запускает автосохранение в фоне"""
+    def auto_backup_worker():
+        while True:
+            import time
+            time.sleep(300)  # 5 минут
+            backup_database()
     
-    if update.callback_query:
-        message = await update.callback_query.message.reply_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode
-        )
-    else:
-        message = await update.message.reply_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode
-        )
-    
-    context.user_data['last_bot_message_id'] = message.message_id
-    context.user_data['last_chat_id'] = message.chat_id
-    return message
+    thread = threading.Thread(target=auto_backup_worker, daemon=True)
+    thread.start()
 
-async def edit_and_track(query, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=None):
-    """Редактирует сообщение и сохраняет ID"""
-    await query.edit_message_text(
-        text,
-        reply_markup=reply_markup,
-        parse_mode=parse_mode
-    )
-    context.user_data['last_bot_message_id'] = query.message.message_id
-    context.user_data['last_chat_id'] = query.message.chat_id
+# Сохраняем при выходе
+atexit.register(backup_database)
+
+def is_registered(user_id):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    result = c.fetchone()
+    return result is not None
+
+def register_user(user_id, username, first_name, last_name):
+    conn = get_db()
+    c = conn.cursor()
+    registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute("INSERT OR IGNORE INTO users (user_id, username, first_name, last_name, registration_date, balance) VALUES (?, ?, ?, ?, ?, 0)",
+              (user_id, username, first_name, last_name, registration_date))
+    conn.commit()
+
+def update_test_status(user_id, passed):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("UPDATE users SET test_passed = ?, last_test_attempt = ? WHERE user_id = ?",
+              (1 if passed else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
+    conn.commit()
+
+def can_take_test(user_id):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT test_passed, last_test_attempt FROM users WHERE user_id = ?", (user_id,))
+    result = c.fetchone()
+    
+    if not result:
+        return True, 0
+    
+    test_passed, last_attempt_str = result
+    
+    if test_passed == 1:
+        return True, 0
+    
+    if last_attempt_str:
+        last_attempt = datetime.strptime(last_attempt_str, "%Y-%m-%d %H:%M:%S")
+        now = datetime.now()
+        time_diff = now - last_attempt
+        
+        if time_diff < timedelta(minutes=30):
+            remaining = 30 - int(time_diff.total_seconds() / 60)
+            return False, remaining
+    
+    return True, 0
 
 # ========== ТЕСТОВЫЕ ВОПРОСЫ ==========
 TEST_QUESTIONS = [
@@ -174,112 +307,48 @@ TEST_QUESTIONS = [
     }
 ]
 
-# ========== БАЗА ДАННЫХ ==========
-def init_database():
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    
-    # Таблица пользователей
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (user_id INTEGER PRIMARY KEY,
-                  username TEXT,
-                  first_name TEXT,
-                  last_name TEXT,
-                  registration_date TEXT,
-                  test_passed INTEGER DEFAULT 0,
-                  test_attempts INTEGER DEFAULT 0,
-                  last_test_attempt TEXT)''')
-    
-    # Таблица заявок на вывод
-    c.execute('''CREATE TABLE IF NOT EXISTS withdrawals
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  user_id INTEGER,
-                  amount REAL,
-                  payment_method TEXT,
-                  payment_details TEXT,
-                  status TEXT DEFAULT 'pending',
-                  request_date TEXT,
-                  FOREIGN KEY (user_id) REFERENCES users (user_id))''')
-    
-    # Таблица тикетов поддержки
-    c.execute('''CREATE TABLE IF NOT EXISTS support_tickets
-                 (ticket_id TEXT PRIMARY KEY,
-                  user_id INTEGER,
-                  username TEXT,
-                  first_name TEXT,
-                  message TEXT,
-                  status TEXT DEFAULT 'open',
-                  created_at TEXT,
-                  answered_at TEXT,
-                  admin_reply TEXT,
-                  FOREIGN KEY (user_id) REFERENCES users (user_id))''')
-    
-    # Таблица курьеров
-    c.execute('''CREATE TABLE IF NOT EXISTS couriers
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  recruiter_id INTEGER,
-                  full_name TEXT,
-                  city TEXT,
-                  registered_at TEXT,
-                  FOREIGN KEY (recruiter_id) REFERENCES users (user_id))''')
-    
-    conn.commit()
-    conn.close()
-    logger.info("База данных инициализирована")
+# ========== ФУНКЦИИ ДЛЯ УДАЛЕНИЯ СООБЩЕНИЙ ==========
+async def delete_previous_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Удаляет предыдущее сообщение бота"""
+    try:
+        if 'last_bot_message_id' in context.user_data and 'last_chat_id' in context.user_data:
+            await context.bot.delete_message(
+                chat_id=context.user_data['last_chat_id'],
+                message_id=context.user_data['last_bot_message_id']
+            )
+    except Exception:
+        pass
 
-def get_db():
-    return sqlite3.connect('users.db', check_same_thread=False)
+async def send_and_track(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=None):
+    """Отправляет сообщение и сохраняет его ID"""
+    await delete_previous_message(update, context)
+    
+    if update.callback_query:
+        message = await update.callback_query.message.reply_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode
+        )
+    else:
+        message = await update.message.reply_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode
+        )
+    
+    context.user_data['last_bot_message_id'] = message.message_id
+    context.user_data['last_chat_id'] = message.chat_id
+    return message
 
-def is_registered(user_id):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-    result = c.fetchone()
-    conn.close()
-    return result is not None
-
-def register_user(user_id, username, first_name, last_name):
-    conn = get_db()
-    c = conn.cursor()
-    registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("INSERT OR IGNORE INTO users (user_id, username, first_name, last_name, registration_date) VALUES (?, ?, ?, ?, ?)",
-              (user_id, username, first_name, last_name, registration_date))
-    conn.commit()
-    conn.close()
-
-def update_test_status(user_id, passed):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("UPDATE users SET test_passed = ?, last_test_attempt = ? WHERE user_id = ?",
-              (1 if passed else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
-    conn.commit()
-    conn.close()
-
-def can_take_test(user_id):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT test_passed, last_test_attempt FROM users WHERE user_id = ?", (user_id,))
-    result = c.fetchone()
-    conn.close()
-    
-    if not result:
-        return True, 0
-    
-    test_passed, last_attempt_str = result
-    
-    if test_passed == 1:
-        return True, 0
-    
-    if last_attempt_str:
-        last_attempt = datetime.strptime(last_attempt_str, "%Y-%m-%d %H:%M:%S")
-        now = datetime.now()
-        time_diff = now - last_attempt
-        
-        if time_diff < timedelta(minutes=30):
-            remaining = 30 - int(time_diff.total_seconds() / 60)
-            return False, remaining
-    
-    return True, 0
+async def edit_and_track(query, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=None):
+    """Редактирует сообщение и сохраняет ID"""
+    await query.edit_message_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode
+    )
+    context.user_data['last_bot_message_id'] = query.message.message_id
+    context.user_data['last_chat_id'] = query.message.chat_id
 
 # ========== ФУНКЦИИ ПОДДЕРЖКИ ==========
 def create_support_ticket(user_id, username, first_name, message):
@@ -295,7 +364,6 @@ def create_support_ticket(user_id, username, first_name, message):
               (ticket_id, user_id, username, first_name, message, created_at))
     
     conn.commit()
-    conn.close()
     return ticket_id
 
 def get_open_tickets():
@@ -305,17 +373,13 @@ def get_open_tickets():
                  FROM support_tickets 
                  WHERE status = 'open' 
                  ORDER BY created_at ASC''')
-    tickets = c.fetchall()
-    conn.close()
-    return tickets
+    return c.fetchall()
 
 def get_ticket(ticket_id):
     conn = get_db()
     c = conn.cursor()
     c.execute('''SELECT * FROM support_tickets WHERE ticket_id = ?''', (ticket_id,))
-    ticket = c.fetchone()
-    conn.close()
-    return ticket
+    return c.fetchone()
 
 def close_ticket(ticket_id, admin_reply):
     conn = get_db()
@@ -326,21 +390,27 @@ def close_ticket(ticket_id, admin_reply):
                  WHERE ticket_id = ?''',
               (answered_at, admin_reply, ticket_id))
     conn.commit()
-    conn.close()
 
 # ========== ФУНКЦИИ ДЛЯ ВЫВОДА ==========
+def get_user_balance(user_id):
+    """Получает баланс пользователя"""
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+    result = c.fetchone()
+    return result[0] if result else 0
+
 def create_withdrawal_request(user_id, amount, method, details):
     """Создает заявку на вывод"""
     conn = get_db()
     c = conn.cursor()
     request_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c.execute('''INSERT INTO withdrawals 
-                 (user_id, amount, payment_method, payment_details, request_date) 
-                 VALUES (?, ?, ?, ?, ?)''',
+                 (user_id, amount, payment_method, payment_details, request_date, status) 
+                 VALUES (?, ?, ?, ?, ?, 'pending')''',
               (user_id, amount, method, details, request_date))
     request_id = c.lastrowid
     conn.commit()
-    conn.close()
     return request_id
 
 def get_pending_withdrawals():
@@ -353,9 +423,7 @@ def get_pending_withdrawals():
                  JOIN users u ON w.user_id = u.user_id
                  WHERE w.status = 'pending'
                  ORDER BY w.request_date ASC''')
-    requests = c.fetchall()
-    conn.close()
-    return requests
+    return c.fetchall()
 
 def confirm_withdrawal(request_id):
     """Подтверждает заявку на вывод"""
@@ -363,7 +431,6 @@ def confirm_withdrawal(request_id):
     c = conn.cursor()
     c.execute("UPDATE withdrawals SET status = 'completed' WHERE id = ?", (request_id,))
     conn.commit()
-    conn.close()
 
 # ========== ФУНКЦИИ ДЛЯ КУРЬЕРОВ ==========
 def add_courier(recruiter_id, full_name, city):
@@ -378,7 +445,6 @@ def add_courier(recruiter_id, full_name, city):
     exists = c.fetchone()
     
     if exists:
-        conn.close()
         return False, "Курьер с такими данными уже записан"
     
     registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -386,7 +452,6 @@ def add_courier(recruiter_id, full_name, city):
                  VALUES (?, ?, ?, ?)''',
               (recruiter_id, full_name, city, registered_at))
     conn.commit()
-    conn.close()
     return True, "Курьер успешно записан"
 
 def get_recruiter_couriers(recruiter_id):
@@ -397,9 +462,7 @@ def get_recruiter_couriers(recruiter_id):
                  FROM couriers 
                  WHERE recruiter_id = ? 
                  ORDER BY registered_at DESC''', (recruiter_id,))
-    couriers = c.fetchall()
-    conn.close()
-    return couriers
+    return c.fetchall()
 
 # ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -421,7 +484,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
     result = c.fetchone()
     test_passed = result[0] if result else 0
-    conn.close()
     
     if test_passed == 1:
         keyboard = [
@@ -473,7 +535,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
     result = c.fetchone()
     test_passed = result[0] if result else 0
-    conn.close()
     
     protected_sections = ['withdrawal', 'personal_account', 'my_couriers', 'add_courier']
     if test_passed == 0 and data in protected_sections:
@@ -509,6 +570,137 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_all_info_menu(query, context)
     elif data.startswith('answer_'):
         await handle_test_answer(query, user_id, context)
+    elif data in ['withdrawal_card', 'withdrawal_yoomoney', 'withdrawal_other']:
+        await process_withdrawal_option(query, user_id, context)
+
+# ========== ВЫВОД СРЕДСТВ ==========
+async def withdrawal_menu(query, user_id, context):
+    balance = get_user_balance(user_id)
+    
+    text = (
+        f"💰 *Вывод средств*\n\n"
+        f"💳 *Ваш баланс:* {balance} руб.\n"
+        f"⏱ *Обновляется:* каждые 24 часа\n\n"
+        f"Выберите способ вывода:"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("💳 Карта", callback_data='withdrawal_card')],
+        [InlineKeyboardButton("📱 ЮMoney", callback_data='withdrawal_yoomoney')],
+        [InlineKeyboardButton("🔄 Другой способ", callback_data='withdrawal_other')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]
+    ]
+    
+    await edit_and_track(
+        query, context,
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+
+async def process_withdrawal_option(query, user_id, context):
+    method = query.data.replace('withdrawal_', '')
+    context.user_data['withdrawal_method'] = method
+    
+    keyboard = [[InlineKeyboardButton("🔙 Отмена", callback_data='withdrawal')]]
+    await edit_and_track(
+        query, context,
+        f"Выбран способ: *{method}*\n\n"
+        f"Введите сумму и реквизиты в формате:\n"
+        f"Сумма|Реквизиты\n\n"
+        f"Пример: 500|1234567890123456",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    
+    context.user_data['awaiting_withdrawal_details'] = True
+
+async def handle_withdrawal_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    text = update.message.text
+    
+    try:
+        amount, details = text.split('|')
+        amount = float(amount.strip())
+        details = details.strip()
+        method = context.user_data.get('withdrawal_method', 'unknown')
+        balance = get_user_balance(user.id)
+        
+        if amount < 100:
+            await send_and_track(
+                update, context,
+                "❌ Минимальная сумма вывода: 100 руб."
+            )
+            return
+        
+        if amount > balance:
+            await send_and_track(
+                update, context,
+                f"❌ Недостаточно средств. Ваш баланс: {balance} руб."
+            )
+            return
+        
+        request_id = create_withdrawal_request(user.id, amount, method, details)
+        
+        await send_and_track(
+            update, context,
+            f"✅ *Заявка на вывод создана!*\n\n"
+            f"🆔 Номер заявки: `{request_id}`\n"
+            f"💰 Сумма: {amount} руб.\n"
+            f"💳 Способ: {method}\n\n"
+            f"Ожидайте подтверждения администратором.",
+            parse_mode='Markdown'
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Подтвердить", callback_data=f'withdrawal_confirm_{request_id}')]
+        ]
+        
+        admin_message = (
+            f"💰 *НОВАЯ ЗАЯВКА НА ВЫВОД*\n\n"
+            f"🆔 *Заявка:* `{request_id}`\n"
+            f"👤 *Пользователь:* {user.first_name} (@{user.username})\n"
+            f"🆔 *User ID:* `{user.id}`\n"
+            f"💰 *Сумма:* {amount} руб.\n"
+            f"💳 *Способ:* {method}\n"
+            f"📝 *Реквизиты:* {details}"
+        )
+        
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=admin_message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        
+    except ValueError:
+        await send_and_track(
+            update, context,
+            "❌ Неверный формат. Используйте: Сумма|Реквизиты\n"
+            "Пример: 500|1234567890123456"
+        )
+    except Exception as e:
+        await send_and_track(
+            update, context,
+            f"❌ Ошибка: {str(e)}"
+        )
+    
+    context.user_data['awaiting_withdrawal_details'] = False
+
+async def admin_withdrawal_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ У вас нет прав администратора")
+        return
+    
+    request_id = int(query.data.replace('withdrawal_confirm_', ''))
+    confirm_withdrawal(request_id)
+    
+    await query.edit_message_text(
+        f"✅ Заявка {request_id} подтверждена"
+    )
 
 # ========== ПОДДЕРЖКА ==========
 async def support_start(query, user_id, context):
@@ -764,118 +956,6 @@ async def handle_courier_input(update: Update, context: ContextTypes.DEFAULT_TYP
         "👤 *Личный кабинет*\n\nВыберите действие:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
-    )
-
-# ========== ВЫВОД СРЕДСТВ ==========
-async def withdrawal_menu(query, user_id, context):
-    keyboard = [
-        [InlineKeyboardButton("💳 Карта", callback_data='withdrawal_card')],
-        [InlineKeyboardButton("📱 ЮMoney", callback_data='withdrawal_yoomoney')],
-        [InlineKeyboardButton("🔄 Другой способ", callback_data='withdrawal_other')],
-        [InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]
-    ]
-    
-    await edit_and_track(
-        query, context,
-        "💰 *Вывод средств*\n\nВыберите способ вывода:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
-
-async def process_withdrawal_option(query, user_id, context):
-    method = query.data.replace('withdrawal_', '')
-    context.user_data['withdrawal_method'] = method
-    
-    keyboard = [[InlineKeyboardButton("🔙 Отмена", callback_data='withdrawal')]]
-    await edit_and_track(
-        query, context,
-        f"Выбран способ: *{method}*\n\n"
-        f"Введите сумму и реквизиты в формате:\n"
-        f"Сумма|Реквизиты\n\n"
-        f"Пример: 500|1234567890123456",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
-    
-    context.user_data['awaiting_withdrawal_details'] = True
-
-async def handle_withdrawal_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    text = update.message.text
-    
-    try:
-        amount, details = text.split('|')
-        amount = float(amount.strip())
-        details = details.strip()
-        method = context.user_data.get('withdrawal_method', 'unknown')
-        
-        if amount < 100:
-            await send_and_track(
-                update, context,
-                "❌ Минимальная сумма вывода: 100 руб."
-            )
-            return
-        
-        request_id = create_withdrawal_request(user.id, amount, method, details)
-        
-        await send_and_track(
-            update, context,
-            f"✅ *Заявка на вывод создана!*\n\n"
-            f"🆔 Номер заявки: `{request_id}`\n"
-            f"💰 Сумма: {amount} руб.\n"
-            f"💳 Способ: {method}\n\n"
-            f"Ожидайте подтверждения администратором.",
-            parse_mode='Markdown'
-        )
-        
-        keyboard = [
-            [InlineKeyboardButton("✅ Подтвердить", callback_data=f'withdrawal_confirm_{request_id}')]
-        ]
-        
-        admin_message = (
-            f"💰 *НОВАЯ ЗАЯВКА НА ВЫВОД*\n\n"
-            f"🆔 *Заявка:* `{request_id}`\n"
-            f"👤 *Пользователь:* {user.first_name} (@{user.username})\n"
-            f"🆔 *User ID:* `{user.id}`\n"
-            f"💰 *Сумма:* {amount} руб.\n"
-            f"💳 *Способ:* {method}\n"
-            f"📝 *Реквизиты:* {details}"
-        )
-        
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=admin_message,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
-        
-    except ValueError:
-        await send_and_track(
-            update, context,
-            "❌ Неверный формат. Используйте: Сумма|Реквизиты\n"
-            "Пример: 500|1234567890123456"
-        )
-    except Exception as e:
-        await send_and_track(
-            update, context,
-            f"❌ Ошибка: {str(e)}"
-        )
-    
-    context.user_data['awaiting_withdrawal_details'] = False
-
-async def admin_withdrawal_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    if update.effective_user.id != ADMIN_ID:
-        await query.edit_message_text("❌ У вас нет прав администратора")
-        return
-    
-    request_id = int(query.data.replace('withdrawal_confirm_', ''))
-    confirm_withdrawal(request_id)
-    
-    await query.edit_message_text(
-        f"✅ Заявка {request_id} подтверждена"
     )
 
 # ========== ТЕСТИРОВАНИЕ ==========
@@ -1192,7 +1272,6 @@ async def back_to_main(query, user_id, context):
     c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
     result = c.fetchone()
     test_passed = result[0] if result else 0
-    conn.close()
     
     if test_passed == 1:
         keyboard = [
