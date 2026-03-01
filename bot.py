@@ -12,6 +12,7 @@ import threading
 import atexit
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import time
 
 # Настройка логирования
 logging.basicConfig(
@@ -81,7 +82,10 @@ def init_database():
                   recruiter_id INTEGER,
                   full_name TEXT,
                   city TEXT,
-                  registered_at TEXT)''')
+                  status TEXT DEFAULT 'pending',
+                  registered_at TEXT,
+                  confirmed_at TEXT,
+                  sheet_row INTEGER)''')
     
     DB_CONN.commit()
     logger.info("✅ База данных инициализирована в файле users.db")
@@ -98,7 +102,8 @@ def get_google_sheet():
     """Подключается к Google Sheets и возвращает рабочий лист"""
     try:
         scope = ['https://spreadsheets.google.com/feeds', 
-                 'https://www.googleapis.com/auth/drive']
+                 'https://www.googleapis.com/auth/drive',
+                 'https://www.googleapis.com/auth/spreadsheets']
         
         creds_json = os.environ.get('GOOGLE_CREDS_JSON')
         
@@ -123,25 +128,112 @@ def get_google_sheet():
         return None
 
 def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, city):
-    """Добавляет запись о курьере в Google Sheets"""
+    """Добавляет запись о курьере в Google Sheets с кнопками"""
     try:
         sheet = get_google_sheet()
         if not sheet:
-            return False
+            return None, None
         
+        # Добавляем строку с данными
         row = [
             datetime.now().strftime("%d.%m.%Y %H:%M"),
             recruiter_name,
             f"@{recruiter_username}" if recruiter_username else "-",
             full_name,
-            city
+            city,
+            "⏳ Ожидает",  # Статус
+            "",  # Для кнопки Да
+            ""   # Для кнопки Нет
         ]
-        sheet.append_row(row)
-        logger.info(f"✅ Курьер {full_name} добавлен в Google Sheets")
-        return True
+        new_row = sheet.append_row(row, value_input_option='USER_ENTERED')
+        
+        # Получаем номер добавленной строки
+        time.sleep(2)  # Даем время Google обновиться
+        all_records = sheet.get_all_records()
+        row_number = len(all_records) + 1
+        
+        # Добавляем формулы для кнопок
+        sheet.update_cell(row_number, 7, f'=HYPERLINK("#", "✅")')
+        sheet.update_cell(row_number, 8, f'=HYPERLINK("#", "❌")')
+        
+        logger.info(f"✅ Курьер {full_name} добавлен в Google Sheets (строка {row_number})")
+        return True, row_number
     except Exception as e:
         logger.error(f"Ошибка добавления в Google Sheets: {e}")
-        return False
+        return None, None
+
+def check_pending_couriers():
+    """Проверяет статусы курьеров в Google Sheets"""
+    try:
+        sheet = get_google_sheet()
+        if not sheet:
+            return
+        
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Получаем все записи из таблицы
+        records = sheet.get_all_records()
+        
+        for idx, record in enumerate(records, start=2):  # со 2 строки (1 - заголовки)
+            full_name = record.get('ФИО курьера', '')
+            city = record.get('Город', '')
+            status = record.get('Статус', '')
+            
+            # Проверяем, есть ли этот курьер в БД со статусом pending
+            c.execute('''SELECT id, recruiter_id FROM couriers 
+                         WHERE full_name = ? AND city = ? AND status = 'pending' 
+                         ORDER BY id DESC LIMIT 1''', (full_name, city))
+            courier = c.fetchone()
+            
+            if courier:
+                courier_id, recruiter_id = courier
+                
+                # Проверяем, не нажата ли кнопка подтверждения
+                cell_f = sheet.cell(idx, 6).value
+                cell_g = sheet.cell(idx, 7).value
+                
+                # Проверяем, изменился ли статус
+                if cell_f == "✅" or (cell_g and "✅" in str(cell_g)):
+                    # Подтверждаем курьера
+                    c.execute('''UPDATE couriers 
+                                 SET status = 'confirmed', confirmed_at = ? 
+                                 WHERE id = ?''', 
+                              (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), courier_id))
+                    
+                    # Уведомляем рекрутера
+                    # TODO: добавить уведомление
+                    
+                    logger.info(f"✅ Курьер {full_name} подтвержден (строка {idx})")
+                    
+                elif cell_f == "❌" or (cell_g and "❌" in str(cell_g)):
+                    # Отклоняем курьера
+                    c.execute('''UPDATE couriers 
+                                 SET status = 'rejected' 
+                                 WHERE id = ?''', (courier_id,))
+                    
+                    logger.info(f"❌ Курьер {full_name} отклонен (строка {idx})")
+        
+        conn.commit()
+        conn.close()
+        
+    except Exception as e:
+        logger.error(f"Ошибка проверки статусов: {e}")
+
+def start_sheet_monitoring():
+    """Запускает мониторинг Google Sheets в фоне"""
+    def monitor_worker():
+        while True:
+            try:
+                check_pending_couriers()
+                time.sleep(60)  # Проверяем каждую минуту
+            except Exception as e:
+                logger.error(f"Ошибка в мониторинге: {e}")
+                time.sleep(60)
+    
+    thread = threading.Thread(target=monitor_worker, daemon=True)
+    thread.start()
+    logger.info("✅ Мониторинг Google Sheets запущен")
 
 # ========== ФУНКЦИИ ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕЙ ==========
 def is_registered(user_id):
@@ -435,17 +527,19 @@ def add_courier(recruiter_id, full_name, city):
     
     # Проверяем, нет ли уже такого курьера у этого рекрутера
     c.execute('''SELECT id FROM couriers 
-                 WHERE recruiter_id = ? AND full_name = ? AND city = ?''',
+                 WHERE recruiter_id = ? AND full_name = ? AND city = ? AND status = 'confirmed' ''',
               (recruiter_id, full_name, city))
     exists = c.fetchone()
     
     if exists:
-        return False, "Курьер с такими данными уже записан"
+        return False, "Курьер с такими данными уже подтвержден"
     
+    # Добавляем в БД со статусом pending
     registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute('''INSERT INTO couriers (recruiter_id, full_name, city, registered_at)
-                 VALUES (?, ?, ?, ?)''',
-              (recruiter_id, full_name, city, registered_at))
+    c.execute('''INSERT INTO couriers 
+                 (recruiter_id, full_name, city, status, registered_at)
+                 VALUES (?, ?, ?, ?, ?)''',
+              (recruiter_id, full_name, city, 'pending', registered_at))
     conn.commit()
     
     # Получаем данные рекрутера для Google Sheets
@@ -454,24 +548,28 @@ def add_courier(recruiter_id, full_name, city):
     recruiter_name = recruiter[0] if recruiter else "Неизвестно"
     recruiter_username = recruiter[1] if recruiter else ""
     
-    # Отправляем в Google Sheets (в отдельном потоке, чтобы не тормозить бота)
-    try:
-        threading.Thread(
-            target=add_courier_to_google_sheet,
-            args=(recruiter_name, recruiter_username, full_name, city),
-            daemon=True
-        ).start()
-        logger.info(f"Запущена отправка в Google Sheets для курьера {full_name}")
-    except Exception as e:
-        logger.error(f"Ошибка запуска потока для Google Sheets: {e}")
+    # Отправляем в Google Sheets с кнопками
+    success, row_number = add_courier_to_google_sheet(
+        recruiter_name, recruiter_username, full_name, city
+    )
     
-    return True, "Курьер успешно записан"
+    if success and row_number:
+        # Обновляем номер строки в БД
+        c.execute('''UPDATE couriers SET sheet_row = ? 
+                     WHERE recruiter_id = ? AND full_name = ? AND city = ? AND status = 'pending' ''',
+                  (row_number, recruiter_id, full_name, city))
+        conn.commit()
+        logger.info(f"✅ Курьер {full_name} добавлен, строка в таблице: {row_number}")
+    
+    conn.close()
+    
+    return True, "Заявка на курьера отправлена на проверку! ✅"
 
 def get_recruiter_couriers(recruiter_id):
     """Получает всех курьеров рекрутера"""
     conn = get_db()
     c = conn.cursor()
-    c.execute('''SELECT full_name, city, registered_at 
+    c.execute('''SELECT full_name, city, status, registered_at, confirmed_at 
                  FROM couriers 
                  WHERE recruiter_id = ? 
                  ORDER BY registered_at DESC''', (recruiter_id,))
@@ -504,6 +602,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')],
             [InlineKeyboardButton("💰 Вывод средств", callback_data='withdrawal')],
             [InlineKeyboardButton("👤 Личный кабинет", callback_data='personal_account')],
+            [InlineKeyboardButton("💼 Ставки по городам", callback_data='rates')],
             [InlineKeyboardButton("🆘 Обратиться в поддержку", callback_data='support')]
         ]
         menu_text = "🏠 *Главное меню*\n\nВыберите нужный раздел:"
@@ -549,7 +648,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = c.fetchone()
     test_passed = result[0] if result else 0
     
-    protected_sections = ['withdrawal', 'personal_account', 'my_couriers', 'add_courier']
+    protected_sections = ['withdrawal', 'personal_account', 'my_couriers', 'add_courier', 'rates']
     if test_passed == 0 and data in protected_sections:
         keyboard = [[InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')]]
         await edit_and_track(
@@ -573,6 +672,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_my_couriers(query, user_id, context)
     elif data == 'add_courier':
         await add_courier_start(query, user_id, context)
+    elif data == 'rates':
+        await show_rates(query, context)
     elif data == 'support':
         await support_start(query, user_id, context)
     elif data.startswith('info_'):
@@ -585,6 +686,26 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_test_answer(query, user_id, context)
     elif data in ['withdrawal_card', 'withdrawal_yoomoney', 'withdrawal_other']:
         await process_withdrawal_option(query, user_id, context)
+
+async def show_rates(query, context):
+    """Временная заглушка для ставок по городам"""
+    text = (
+        "💼 *Ставки по городам*\n\n"
+        "⚙️ Раздел находится в разработке.\n\n"
+        "Скоро здесь появится актуальная информация о:\n"
+        "• Доходах курьеров в разных городах\n"
+        "• Бонусных программах\n"
+        "• Специальных предложениях\n\n"
+        "Следите за обновлениями! 🚀"
+    )
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]]
+    await edit_and_track(
+        query, context,
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
 
 # ========== ВЫВОД СРЕДСТВ ==========
 async def withdrawal_menu(query, user_id, context):
@@ -875,11 +996,22 @@ async def show_my_couriers(query, user_id, context):
         text = "📭 *У вас пока нет записанных курьеров*"
     else:
         text = "👥 *Ваши курьеры:*\n\n"
-        for i, (name, city, date) in enumerate(couriers, 1):
-            date_obj = datetime.strptime(date, "%Y-%m-%d %H:%M:%S")
+        for full_name, city, status, reg_date, conf_date in couriers:
+            date_obj = datetime.strptime(reg_date, "%Y-%m-%d %H:%M:%S")
             date_str = date_obj.strftime("%d.%m.%Y")
-            text += f"{i}. *{name}* — {city}\n"
-            text += f"   📅 {date_str}\n\n"
+            
+            if status == 'confirmed':
+                status_emoji = "✅"
+                conf_info = f" (подтвержден)"
+            elif status == 'rejected':
+                status_emoji = "❌"
+                conf_info = f" (отклонен)"
+            else:
+                status_emoji = "⏳"
+                conf_info = f" (ожидает проверки)"
+            
+            text += f"{status_emoji} *{full_name}* — {city}\n"
+            text += f"   📅 {date_str}{conf_info}\n\n"
     
     keyboard = [
         [InlineKeyboardButton("📝 Записать курьера", callback_data='add_courier')],
@@ -899,7 +1031,8 @@ async def add_courier_start(query, user_id, context):
         "Введите данные курьера в формате:\n"
         "`Фамилия Имя, Город`\n\n"
         "Например:\n"
-        "`Иванов Иван, Москва`"
+        "`Иванов Иван, Москва`\n\n"
+        "После отправки заявка будет отправлена на проверку администратору. ✅"
     )
     
     keyboard = [[InlineKeyboardButton("🔙 Отмена", callback_data='personal_account')]]
@@ -941,9 +1074,10 @@ async def handle_courier_input(update: Update, context: ContextTypes.DEFAULT_TYP
         if success:
             await send_and_track(
                 update, context,
-                f"✅ *Курьер успешно записан!*\n\n"
+                f"✅ *{message}*\n\n"
                 f"👤 *Имя:* {full_name}\n"
-                f"🏙 *Город:* {city}",
+                f"🏙 *Город:* {city}\n\n"
+                f"Статус будет обновлен после проверки администратором.",
                 parse_mode='Markdown'
             )
         else:
@@ -1196,6 +1330,16 @@ async def show_info_section(query, context):
 ❌ вводящая в заблуждение информация о доходах
 
 ⚠️ *Фрод = блокировка навсегда!*
+
+💰 *Бонусы за приглашение курьеров*
+
+Вы можете приглашать курьеров и получать бонусы за успешных кандидатов. Однако помните:
+
+• ❌ Попытки обмана (фейковые анкеты, накрутки) приведут к мгновенной блокировке аккаунта
+• ✅ Работайте честно, привлекайте реальных курьеров
+• 💰 Только качественные кандидаты приносят стабильный доход
+
+*Будьте честны с сервисом — и сервис будет честен с вами!*
         """,
         'documents': """
 📄 *Документы для оформления курьера*
@@ -1293,6 +1437,7 @@ async def back_to_main(query, user_id, context):
             [InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')],
             [InlineKeyboardButton("💰 Вывод средств", callback_data='withdrawal')],
             [InlineKeyboardButton("👤 Личный кабинет", callback_data='personal_account')],
+            [InlineKeyboardButton("💼 Ставки по городам", callback_data='rates')],
             [InlineKeyboardButton("🆘 Обратиться в поддержку", callback_data='support')]
         ]
         menu_text = "🏠 *Главное меню*\n\nВыберите нужный раздел:"
@@ -1397,7 +1542,7 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(f"✅ Переменные найдены\nID таблицы: {sheet_id}")
         
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
         
         try:
             creds_dict = json.loads(creds_json)
@@ -1433,7 +1578,10 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "ТЕСТ",
                 "@test",
                 "Тестовый Курьер",
-                "Тест-город"
+                "Тест-город",
+                "⏳ Ожидает",
+                "",
+                ""
             ]
             sheet.append_row(test_row)
             await update.message.reply_text("✅ Тестовая запись успешно добавлена в таблицу!")
@@ -1447,6 +1595,7 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== ЗАПУСК ==========
 def main():
     init_database()
+    start_sheet_monitoring()  # Запускаем мониторинг Google Sheets
     
     application = Application.builder().token(TOKEN).build()
     
