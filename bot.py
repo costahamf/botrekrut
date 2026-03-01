@@ -368,6 +368,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_all_info_menu(query)
     elif data.startswith('answer_'):
         await handle_test_answer(query, user_id, context)
+    elif data == 'next_question':  # 👈 ВАЖНО: добавляем эту строчку
+        await next_question_callback(update, context)
 
 # ========== ПОДДЕРЖКА ==========
 async def support_start(query, user_id, context):
@@ -1085,4 +1087,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
