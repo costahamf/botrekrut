@@ -35,7 +35,7 @@ CALCULATOR_URL = "https://eda.yandex.ru/partner/perf/samara/?utm_medium=cpc&utm_
 # ========== ПОСТОЯННОЕ ХРАНЕНИЕ ДАННЫХ ==========
 DB_CONN = None
 
-ddef init_database():
+def init_database():
     """Инициализирует БД в памяти и загружает данные из файла"""
     global DB_CONN
     DB_CONN = sqlite3.connect(':memory:', check_same_thread=False)
@@ -1587,6 +1587,7 @@ def main():
     
 if __name__ == '__main__':
     main()
+
 
 
 
