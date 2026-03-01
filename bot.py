@@ -1130,7 +1130,21 @@ async def personal_account_menu(query, user_id, context):
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
-
+def get_recruiter_couriers(recruiter_id):
+    """Получает всех курьеров рекрутера"""
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute('''SELECT full_name, city, status, registered_at, confirmed_at 
+                     FROM couriers 
+                     WHERE recruiter_id = ? 
+                     ORDER BY registered_at DESC''', (recruiter_id,))
+        return c.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка в get_recruiter_couriers: {e}")
+        return []
+    finally:
+        conn.close()
 async def show_my_couriers(query, user_id, context):
     couriers = get_recruiter_couriers(user_id)
     
@@ -1753,6 +1767,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
