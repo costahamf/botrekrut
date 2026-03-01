@@ -668,19 +668,21 @@ def add_courier(recruiter_id, full_name, city):
             recruiter_name, recruiter_username, full_name, city
         )
         
-        if success and row_number:
+            if success and row_number:
             # Обновляем номер строки в БД
             c.execute('''UPDATE couriers SET sheet_row = ? 
                          WHERE recruiter_id = ? AND full_name = ? AND city = ? AND status = 'pending' ''',
                       (row_number, recruiter_id, full_name, city))
             conn.commit()
             logger.info(f"✅ Курьер {full_name} добавлен, строка в таблице: {row_number}")
+            
+            # Проверяем, что запись действительно добавилась
             c.execute("SELECT * FROM couriers WHERE recruiter_id = ? ORDER BY id DESC LIMIT 1", (recruiter_id,))
             last = c.fetchone()
-                if last:
-                    logger.info(f"   ✅ Проверка: последний добавленный в БД - {last[2]}, {last[3]}, статус {last[4]}")
-                else:
-                    logger.info(f"   ❌ Странно, запись не найдена в БД")
+            if last:
+                logger.info(f"   ✅ Проверка: последний добавленный в БД - {last[2]}, {last[3]}, статус {last[4]}")
+            else:
+                logger.info(f"   ❌ Странно, запись не найдена в БД")
         
         return True, "Заявка на курьера отправлена на проверку! ✅"
     except Exception as e:
@@ -1740,6 +1742,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
