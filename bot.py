@@ -174,7 +174,7 @@ def check_pending_couriers():
         if not sheet:
             return
         
-        # Получаем все записи из таблицы
+        # Получаем все записи из таблицы (включая значения чекбоксов)
         records = sheet.get_all_records()
         
         for idx, record in enumerate(records, start=2):  # со 2 строки (1 - заголовки)
@@ -184,9 +184,13 @@ def check_pending_couriers():
             if not full_name or not city:
                 continue
             
-            # Получаем значения чекбоксов (через API они приходят как True/False)
-            is_confirm = record.get('ПРИНЯТО', False)
-            is_reject = record.get('ОТКЛОНЕНО', False)
+            # ПОЛУЧАЕМ ЗНАЧЕНИЯ ЧЕКБОКСОВ НАПРЯМУЮ ИЗ ЯЧЕЕК
+            cell_g = sheet.cell(idx, 7).value  # Колонка G (ПРИНЯТО)
+            cell_h = sheet.cell(idx, 8).value  # Колонка H (ОТКЛОНЕНО)
+            
+            # Преобразуем в булевы значения
+            is_confirm = cell_g in ['TRUE', True, 'true', '1', 1, '✅', '✓', '✔']
+            is_reject = cell_h in ['TRUE', True, 'true', '1', 1, '❌', '✗', '✘']
             
             # Для каждого курьера создаем НОВОЕ соединение
             conn = get_db()
@@ -203,7 +207,7 @@ def check_pending_couriers():
                     courier_id, recruiter_id = courier
                     
                     # Проверяем чекбоксы
-                    if is_confirm and not is_reject:  # Только если ПРИНЯТО отмечен, а ОТКЛОНЕНО нет
+                    if is_confirm and not is_reject:  # Только если ПРИНЯТО отмечен
                         # Подтверждаем курьера
                         c.execute('''UPDATE couriers 
                                      SET status = 'confirmed', confirmed_at = ? 
@@ -213,12 +217,12 @@ def check_pending_couriers():
                         # Обновляем статус в Google Sheets
                         sheet.update_cell(idx, 6, "✅ Подтвержден")
                         
-                        # Снимаем отметку с чекбокса (опционально)
-                        sheet.update_cell(idx, 7, "FALSE")
+                        # Снимаем отметку с чекбокса
+                        sheet.update_cell(idx, 7, False)
                         
                         logger.info(f"✅ Курьер {full_name} подтвержден (строка {idx})")
                         
-                    elif is_reject and not is_confirm:  # Только если ОТКЛОНЕНО отмечен, а ПРИНЯТО нет
+                    elif is_reject and not is_confirm:  # Только если ОТКЛОНЕНО отмечен
                         # Отклоняем курьера
                         c.execute('''UPDATE couriers 
                                      SET status = 'rejected' 
@@ -227,8 +231,8 @@ def check_pending_couriers():
                         # Обновляем статус в Google Sheets
                         sheet.update_cell(idx, 6, "❌ Отклонен")
                         
-                        # Снимаем отметку с чекбокса (опционально)
-                        sheet.update_cell(idx, 8, "FALSE")
+                        # Снимаем отметку с чекбокса
+                        sheet.update_cell(idx, 8, False)
                         
                         logger.info(f"❌ Курьер {full_name} отклонен (строка {idx})")
                         
@@ -1695,6 +1699,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
