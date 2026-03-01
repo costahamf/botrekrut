@@ -116,7 +116,6 @@ def init_database():
     
     # Запускаем автосохранение
     start_auto_backup()
-
 def get_db():
     """Возвращает соединение с БД (не закрывает его глобально)"""
     global DB_CONN
@@ -1587,6 +1586,7 @@ def main():
     
 if __name__ == '__main__':
     main()
+
 
 
 
