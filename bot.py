@@ -63,7 +63,8 @@ def init_database():
                   payment_method TEXT,
                   payment_details TEXT,
                   status TEXT DEFAULT 'pending',
-                  request_date TEXT)''')
+                  request_date TEXT,
+                  completed_date TEXT)''')
     
     # Таблица тикетов поддержки
     c.execute('''CREATE TABLE IF NOT EXISTS support_tickets
@@ -77,7 +78,7 @@ def init_database():
                   answered_at TEXT,
                   admin_reply TEXT)''')
     
-    # Таблица курьеров (ОДНА, с балансом)
+    # Таблица курьеров
     c.execute('''CREATE TABLE IF NOT EXISTS couriers
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   recruiter_id INTEGER,
@@ -91,8 +92,8 @@ def init_database():
     
     conn.commit()
     conn.close()
-    logger.info("✅ База данных инициализирована в файле users.db")
-    
+    logger.info("✅ База данных инициализирована")
+
 # ========== GOOGLE SHEETS ИНТЕГРАЦИЯ ==========
 def get_google_sheet():
     """Подключается к Google Sheets и возвращает рабочий лист"""
@@ -117,7 +118,6 @@ def get_google_sheet():
             return None
             
         sheet = client.open_by_key(sheet_id).sheet1
-        logger.info("✅ Подключение к Google Sheets установлено")
         return sheet
     except Exception as e:
         logger.error(f"Ошибка подключения к Google Sheets: {e}")
@@ -130,26 +130,23 @@ def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, c
         if not sheet:
             return None, None
         
-        # Добавляем строку с данными (теперь есть колонка для баланса)
         row = [
             datetime.now().strftime("%d.%m.%Y %H:%M"),
             recruiter_name,
             f"@{recruiter_username}" if recruiter_username else "-",
             full_name,
             city,
-            "⏳ Ожидает",  # Статус
-            0,  # Баланс курьера (ты будешь заполнять)
-            0,  # 0 = не принято, 1 = принято
-            0   # 0 = не отклонено, 1 = отклонено
+            "⏳ Ожидает",
+            0,  # Баланс
+            0,  # ПРИНЯТО
+            0   # ОТКЛОНЕНО
         ]
         sheet.append_row(row, value_input_option='USER_ENTERED')
         
-        # Получаем номер добавленной строки
         time.sleep(2)
         all_records = sheet.get_all_records()
         row_number = len(all_records) + 1
         
-        logger.info(f"✅ Курьер {full_name} добавлен в Google Sheets (строка {row_number})")
         return True, row_number
     except Exception as e:
         logger.error(f"Ошибка добавления в Google Sheets: {e}")
@@ -160,15 +157,11 @@ def check_pending_couriers():
     try:
         sheet = get_google_sheet()
         if not sheet:
-            logger.error("❌ Нет доступа к Google Sheets")
             return
         
-        # Получаем все записи из таблицы
         records = sheet.get_all_records()
-        logger.info(f"🔍 Найдено записей в таблице: {len(records)}")
-        
-        # Словарь для суммирования балансов по рекрутерам
         recruiter_balances = {}
+        changes_count = 0
         
         for idx, record in enumerate(records, start=2):
             full_name = record.get('ФИО клиента', '')
@@ -177,59 +170,57 @@ def check_pending_couriers():
             if not full_name or not city:
                 continue
             
-            # Получаем значения
             принято = record.get('ПРИНЯТО', 0)
             отклонено = record.get('ОТКЛОНЕНО', 0)
-            courier_balance = record.get('Баланс', 0)  # 👈 Новая колонка
+            courier_balance = record.get('Баланс', 0)
             
-            # Преобразуем баланс в число
             try:
                 courier_balance = float(courier_balance) if courier_balance else 0
             except:
                 courier_balance = 0
             
-            # Для каждого курьера создаем НОВОЕ соединение
             conn = get_db()
             c = conn.cursor()
             
             try:
-                # Ищем курьера в БД (по имени и городу)
-                c.execute('''SELECT id, recruiter_id, status FROM couriers 
+                c.execute('''SELECT id, recruiter_id, status, balance FROM couriers 
                              WHERE full_name = ? AND city = ? 
                              ORDER BY id DESC LIMIT 1''', (full_name, city))
                 courier = c.fetchone()
                 
                 if courier:
-                    courier_id, recruiter_id, status = courier
+                    courier_id, recruiter_id, status, current_balance = courier
                     
-                    # Обновляем баланс курьера в БД
-                    c.execute('''UPDATE couriers SET balance = ? WHERE id = ?''', 
-                              (courier_balance, courier_id))
+                    if abs(current_balance - courier_balance) > 0.01:
+                        c.execute('''UPDATE couriers SET balance = ? WHERE id = ?''', 
+                                  (courier_balance, courier_id))
+                        changes_count += 1
                     
-                    # Добавляем баланс в общую сумму рекрутера
                     if recruiter_id not in recruiter_balances:
                         recruiter_balances[recruiter_id] = 0
                     recruiter_balances[recruiter_id] += courier_balance
                     
-                    # Обработка подтверждения/отклонения (как было)
-                    if принято == 1 and отклонено == 0 and status == 'pending':
-                        c.execute('''UPDATE couriers 
-                                     SET status = 'confirmed', confirmed_at = ? 
-                                     WHERE id = ?''', 
-                                  (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), courier_id))
-                        sheet.update_cell(idx, 6, "✅ Подтвержден")
-                        sheet.update_cell(idx, 8, 0)
-                        sheet.update_cell(idx, 9, 0)
-                        logger.info(f"✅ Курьер {full_name} подтвержден (строка {idx})")
-                        
-                    elif отклонено == 1 and принято == 0 and status == 'pending':
-                        c.execute('''UPDATE couriers 
-                                     SET status = 'rejected' 
-                                     WHERE id = ?''', (courier_id,))
-                        sheet.update_cell(idx, 6, "❌ Отклонен")
-                        sheet.update_cell(idx, 8, 0)
-                        sheet.update_cell(idx, 9, 0)
-                        logger.info(f"❌ Курьер {full_name} отклонен (строка {idx})")
+                    if status == 'pending':
+                        if принято == 1 and отклонено == 0:
+                            c.execute('''UPDATE couriers 
+                                         SET status = 'confirmed', confirmed_at = ? 
+                                         WHERE id = ?''', 
+                                      (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), courier_id))
+                            sheet.update_cell(idx, 6, "✅ Подтвержден")
+                            sheet.update_cell(idx, 8, 0)
+                            sheet.update_cell(idx, 9, 0)
+                            logger.info(f"✅ Курьер {full_name} подтвержден")
+                            changes_count += 1
+                            
+                        elif отклонено == 1 and принято == 0:
+                            c.execute('''UPDATE couriers 
+                                         SET status = 'rejected' 
+                                         WHERE id = ?''', (courier_id,))
+                            sheet.update_cell(idx, 6, "❌ Отклонен")
+                            sheet.update_cell(idx, 8, 0)
+                            sheet.update_cell(idx, 9, 0)
+                            logger.info(f"❌ Курьер {full_name} отклонен")
+                            changes_count += 1
                     
                     conn.commit()
                     
@@ -239,20 +230,28 @@ def check_pending_couriers():
             finally:
                 conn.close()
         
-        # Обновляем балансы рекрутеров
         if recruiter_balances:
             conn = get_db()
             c = conn.cursor()
             try:
                 for recruiter_id, total_balance in recruiter_balances.items():
-                    c.execute('''UPDATE users SET balance = ? WHERE user_id = ?''', 
-                              (total_balance, recruiter_id))
-                    logger.info(f"💰 Рекрутер {recruiter_id}: общий баланс = {total_balance}")
+                    c.execute("SELECT balance FROM users WHERE user_id = ?", (recruiter_id,))
+                    current = c.fetchone()
+                    current_balance = current[0] if current else 0
+                    
+                    if abs(current_balance - total_balance) > 0.01:
+                        c.execute('''UPDATE users SET balance = ? WHERE user_id = ?''', 
+                                  (total_balance, recruiter_id))
+                        logger.info(f"💰 Баланс рекрутера {recruiter_id} обновлён")
+                        changes_count += 1
                 conn.commit()
             except Exception as e:
-                logger.error(f"Ошибка при обновлении балансов рекрутеров: {e}")
+                logger.error(f"Ошибка при обновлении балансов: {e}")
             finally:
                 conn.close()
+        
+        if changes_count > 0:
+            logger.info(f"📊 Проверка завершена, изменений: {changes_count}")
                 
     except Exception as e:
         logger.error(f"Ошибка проверки статусов: {e}")
@@ -263,24 +262,22 @@ def start_sheet_monitoring():
         while True:
             try:
                 check_pending_couriers()
-                time.sleep(60)  # Проверяем каждую минуту
+                time.sleep(300)
             except Exception as e:
                 logger.error(f"Ошибка в мониторинге: {e}")
-                time.sleep(60)
+                time.sleep(300)
     
     thread = threading.Thread(target=monitor_worker, daemon=True)
     thread.start()
     logger.info("✅ Мониторинг Google Sheets запущен")
 
 # ========== ФУНКЦИИ ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕЙ ==========
-# ========== ФУНКЦИИ ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕЙ ==========
 def is_registered(user_id):
     conn = get_db()
     c = conn.cursor()
     try:
         c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-        result = c.fetchone()
-        return result is not None
+        return c.fetchone() is not None
     except Exception as e:
         logger.error(f"Ошибка в is_registered: {e}")
         return False
@@ -304,15 +301,9 @@ def update_test_status(user_id, passed):
     conn = get_db()
     c = conn.cursor()
     try:
-        logger.info(f"📝 Обновление test_passed для user_id={user_id} на {1 if passed else 0}")
         c.execute("UPDATE users SET test_passed = ?, last_test_attempt = ? WHERE user_id = ?",
                   (1 if passed else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
         conn.commit()
-        
-        # Проверяем, обновилось ли
-        c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
-        new_value = c.fetchone()
-        logger.info(f"   ✅ После обновления test_passed={new_value[0] if new_value else None}")
     except Exception as e:
         logger.error(f"Ошибка в update_test_status: {e}")
     finally:
@@ -455,7 +446,6 @@ TEST_QUESTIONS = [
 
 # ========== ФУНКЦИИ ДЛЯ УДАЛЕНИЯ СООБЩЕНИЙ ==========
 async def delete_previous_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Удаляет предыдущее сообщение бота"""
     try:
         if 'last_bot_message_id' in context.user_data and 'last_chat_id' in context.user_data:
             await context.bot.delete_message(
@@ -466,7 +456,6 @@ async def delete_previous_message(update: Update, context: ContextTypes.DEFAULT_
         pass
 
 async def send_and_track(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=None):
-    """Отправляет сообщение и сохраняет его ID"""
     await delete_previous_message(update, context)
     
     if update.callback_query:
@@ -487,7 +476,6 @@ async def send_and_track(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
     return message
 
 async def edit_and_track(query, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=None):
-    """Редактирует сообщение и сохраняет ID"""
     await query.edit_message_text(
         text,
         reply_markup=reply_markup,
@@ -559,11 +547,9 @@ def close_ticket(ticket_id, admin_reply):
 
 # ========== ФУНКЦИИ ДЛЯ ВЫВОДА ==========
 def get_user_balance(user_id):
-    """Получает баланс пользователя (сумму всех курьеров)"""
     conn = get_db()
     c = conn.cursor()
     try:
-        # Получаем баланс из таблицы users (он обновляется в check_pending_couriers)
         c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
         result = c.fetchone()
         return result[0] if result else 0
@@ -609,97 +595,104 @@ def get_pending_withdrawals():
         conn.close()
 
 def confirm_withdrawal(request_id):
+    """Подтверждает заявку на вывод и списывает баланс"""
     conn = get_db()
     c = conn.cursor()
     try:
-        c.execute("UPDATE withdrawals SET status = 'completed' WHERE id = ?", (request_id,))
-        conn.commit()
+        # Получаем информацию о заявке
+        c.execute("SELECT user_id, amount FROM withdrawals WHERE id = ? AND status = 'pending'", (request_id,))
+        withdrawal = c.fetchone()
+        
+        if withdrawal:
+            user_id, amount = withdrawal
+            
+            # Проверяем текущий баланс
+            c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+            current_balance = c.fetchone()[0]
+            
+            if current_balance >= amount:
+                # Обновляем статус заявки
+                completed_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                c.execute('''UPDATE withdrawals 
+                             SET status = 'completed', completed_date = ? 
+                             WHERE id = ?''', (completed_date, request_id))
+                
+                # СПИСЫВАЕМ БАЛАНС
+                c.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
+                
+                conn.commit()
+                logger.info(f"✅ Заявка {request_id} подтверждена, списано {amount} руб. с пользователя {user_id}")
+                return True
+            else:
+                logger.warning(f"⚠️ Недостаточно средств для заявки {request_id}")
+                return False
+        return False
     except Exception as e:
         logger.error(f"Ошибка в confirm_withdrawal: {e}")
+        conn.rollback()
+        return False
     finally:
         conn.close()
+
 # ========== ФУНКЦИИ ДЛЯ КУРЬЕРОВ ==========
 def add_courier(recruiter_id, full_name, city):
     conn = get_db()
     c = conn.cursor()
     try:
-        logger.info(f"📝 ПОПЫТКА ДОБАВИТЬ КУРЬЕРА: {full_name}, {city} от рекрутера {recruiter_id}")
-        
-        # Проверяем, есть ли вообще пользователь с таким ID
         c.execute("SELECT * FROM users WHERE user_id = ?", (recruiter_id,))
-        user = c.fetchone()
-        if user:
-            logger.info(f"   ✅ Рекрутер найден: {user[2]} (@{user[1]})")
-        else:
-            logger.error(f"   ❌ Рекрутер с ID {recruiter_id} НЕ НАЙДЕН!")
+        if not c.fetchone():
+            return False, "Ошибка авторизации"
         
-        # Проверяем, нет ли уже такого курьера у этого рекрутера
         c.execute('''SELECT id FROM couriers 
                      WHERE recruiter_id = ? AND full_name = ? AND city = ? AND status = 'confirmed' ''',
                   (recruiter_id, full_name, city))
-        exists = c.fetchone()
-        
-        if exists:
-            logger.info(f"   ⚠️ Курьер уже существует в БД с id={exists[0]}")
+        if c.fetchone():
             return False, "Курьер с такими данными уже подтвержден"
         
-        # Добавляем в БД со статусом pending
         registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logger.info(f"   📦 Вставляем в БД: {recruiter_id}, {full_name}, {city}, pending, {registered_at}")
-        
         c.execute('''INSERT INTO couriers 
                      (recruiter_id, full_name, city, status, registered_at)
                      VALUES (?, ?, ?, ?, ?)''',
                   (recruiter_id, full_name, city, 'pending', registered_at))
-        
-        # Проверяем, сколько строк затронуто
-        logger.info(f"   ✅ INSERT выполнен, rows affected: {conn.total_changes}")
         conn.commit()
         
-        # Проверяем, что запись действительно добавилась
-        c.execute("SELECT * FROM couriers WHERE recruiter_id = ? ORDER BY id DESC LIMIT 1", (recruiter_id,))
-        last = c.fetchone()
-        if last:
-            logger.info(f"   ✅ Запись найдена в БД: id={last[0]}, {last[2]}, {last[3]}, статус {last[4]}")
-        else:
-            logger.error(f"   ❌ ЗАПИСЬ НЕ НАЙДЕНА В БД ПОСЛЕ INSERT!")
-            return False, "Ошибка при сохранении в БД"
-        
-        # Получаем данные рекрутера для Google Sheets
         c.execute("SELECT first_name, username FROM users WHERE user_id = ?", (recruiter_id,))
         recruiter = c.fetchone()
         recruiter_name = recruiter[0] if recruiter else "Неизвестно"
         recruiter_username = recruiter[1] if recruiter else ""
         
-        # Отправляем в Google Sheets с кнопками
         success, row_number = add_courier_to_google_sheet(
             recruiter_name, recruiter_username, full_name, city
         )
         
         if success and row_number:
-            # Обновляем номер строки в БД
             c.execute('''UPDATE couriers SET sheet_row = ? 
                          WHERE recruiter_id = ? AND full_name = ? AND city = ? AND status = 'pending' ''',
                       (row_number, recruiter_id, full_name, city))
             conn.commit()
-            logger.info(f"✅ Курьер {full_name} добавлен, строка в таблице: {row_number}")
-            
-            # Проверяем, что запись действительно добавилась
-            c.execute("SELECT * FROM couriers WHERE recruiter_id = ? ORDER BY id DESC LIMIT 1", (recruiter_id,))
-            last = c.fetchone()
-            if last:
-                logger.info(f"   ✅ Проверка: последний добавленный в БД - {last[2]}, {last[3]}, статус {last[4]}")
-            else:
-                logger.info(f"   ❌ Странно, запись не найдена в БД")
         
         return True, "Заявка на курьера отправлена на проверку! ✅"
     except Exception as e:
         logger.error(f"❌ Ошибка в add_courier: {e}")
-        import traceback
-        traceback.print_exc()
         return False, f"Ошибка: {str(e)}"
     finally:
         conn.close()
+
+def get_recruiter_couriers(recruiter_id):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute('''SELECT full_name, city, status, registered_at, confirmed_at 
+                     FROM couriers 
+                     WHERE recruiter_id = ? 
+                     ORDER BY registered_at DESC''', (recruiter_id,))
+        return c.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка в get_recruiter_couriers: {e}")
+        return []
+    finally:
+        conn.close()
+
 # ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await delete_previous_message(update, context)
@@ -720,11 +713,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
     result = c.fetchone()
     test_passed = result[0] if result else 0
-    logger.info(f"👤 Пользователь {user_id} test_passed={test_passed}")
-    if test_passed == 1:
-        logger.info(f"   ✅ Тест пройден, показываем полное меню")
-    else:
-        logger.info(f"   ❌ Тест не пройден, показываем ограниченное меню")
     
     if test_passed == 1:
         keyboard = [
@@ -771,7 +759,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await next_question_callback(update, context)
         return
     
-    # Проверка доступа для обычных пользователей
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
@@ -789,7 +776,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Обработка остальных callback'ов
     if data == 'all_info':
         await show_all_info_menu(query, context)
     elif data == 'take_test':
@@ -818,7 +804,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_withdrawal_option(query, user_id, context)
 
 async def show_rates(query, context):
-    """Временная заглушка для ставок по городам"""
     text = (
         "💼 *Ставки по городам*\n\n"
         "⚙️ Раздел находится в разработке.\n\n"
@@ -960,11 +945,12 @@ async def admin_withdrawal_confirm(update: Update, context: ContextTypes.DEFAULT
         return
     
     request_id = int(query.data.replace('withdrawal_confirm_', ''))
-    confirm_withdrawal(request_id)
+    success = confirm_withdrawal(request_id)
     
-    await query.edit_message_text(
-        f"✅ Заявка {request_id} подтверждена"
-    )
+    if success:
+        await query.edit_message_text(f"✅ Заявка {request_id} подтверждена, баланс списан")
+    else:
+        await query.edit_message_text(f"❌ Ошибка при подтверждении заявки {request_id} (возможно недостаточно средств)")
 
 # ========== ПОДДЕРЖКА ==========
 async def support_start(query, user_id, context):
@@ -1006,7 +992,6 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode='Markdown'
     )
     
-    # КНОПКИ ДЛЯ АДМИНА
     keyboard = [
         [InlineKeyboardButton("📨 Ответить", callback_data=f'admin_reply_{ticket_id}')],
         [InlineKeyboardButton("✅ Закрыть", callback_data=f'admin_close_{ticket_id}')]
@@ -1118,8 +1103,8 @@ async def personal_account_menu(query, user_id, context):
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
+
 def get_recruiter_couriers(recruiter_id):
-    """Получает всех курьеров рекрутера"""
     conn = get_db()
     c = conn.cursor()
     try:
@@ -1133,6 +1118,7 @@ def get_recruiter_couriers(recruiter_id):
         return []
     finally:
         conn.close()
+
 async def show_my_couriers(query, user_id, context):
     couriers = get_recruiter_couriers(user_id)
     total_balance = get_user_balance(user_id)
@@ -1626,43 +1612,68 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========== АДМИН-КОМАНДЫ ==========
-async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_withdrawals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать только заявки на вывод"""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ У вас нет прав администратора")
+        return
+    
+    withdrawals = get_pending_withdrawals()
+    
+    if not withdrawals:
+        await update.message.reply_text("📭 Нет активных заявок на вывод")
+        return
+    
+    text = "💰 *ОЖИДАЮЩИЕ ЗАЯВКИ НА ВЫВОД:*\n\n"
+    for w in withdrawals:
+        text += f"🆔 *{w[0]}*\n"
+        text += f"👤 {w[2]} (@{w[3]})\n"
+        text += f"💰 {w[4]} руб.\n"
+        text += f"💳 {w[5]}\n"
+        text += f"📝 {w[6]}\n"
+        text += f"📅 {w[7]}\n"
+        text += "──────────────────────\n"
+    
+    await update.message.reply_text(text, parse_mode='Markdown')
+
+async def admin_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать только обращения в поддержку"""
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ У вас нет прав администратора")
         return
     
     tickets = get_open_tickets()
-    withdrawals = get_pending_withdrawals()
     
-    if not tickets and not withdrawals:
-        await update.message.reply_text("📭 Нет активных обращений")
+    if not tickets:
+        await update.message.reply_text("📭 Нет активных обращений в поддержку")
         return
     
-    text = ""
+    text = "🆘 *АКТИВНЫЕ ОБРАЩЕНИЯ В ПОДДЕРЖКУ:*\n\n"
+    for ticket in tickets:
+        text += f"🆔 *{ticket[0]}*\n"
+        text += f"👤 {ticket[3]} (@{ticket[2]})\n"
+        text += f"📝 {ticket[4][:100]}...\n"
+        text += f"📅 {ticket[5]}\n"
+        text += "──────────────────────\n"
     
-    if tickets:
-        text += "🆘 АКТИВНЫЕ ОБРАЩЕНИЯ В ПОДДЕРЖКУ:\n\n"
-        for ticket in tickets:
-            text += f"🆔 {ticket[0]}\n"
-            text += f"👤 {ticket[3]} (@{ticket[2]})\n"
-            text += f"📝 {ticket[4][:100]}...\n"
-            text += f"📅 {ticket[5]}\n"
-            text += "──────────────────────\n"
+    await update.message.reply_text(text, parse_mode='Markdown')
+
+async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню администратора"""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ У вас нет прав администратора")
+        return
     
-    if withdrawals:
-        if tickets:
-            text += "\n"
-        text += "💰 ОЖИДАЮЩИЕ ЗАЯВКИ НА ВЫВОД:\n\n"
-        for w in withdrawals:
-            text += f"🆔 {w[0]}\n"
-            text += f"👤 {w[2]} (@{w[3]})\n"
-            text += f"💰 {w[4]} руб.\n"
-            text += f"💳 {w[5]}\n"
-            text += f"📝 {w[6]}\n"
-            text += f"📅 {w[7]}\n"
-            text += "──────────────────────\n"
+    keyboard = [
+        [InlineKeyboardButton("💰 Заявки на вывод", callback_data='admin_show_withdrawals')],
+        [InlineKeyboardButton("🆘 Обращения в поддержку", callback_data='admin_show_tickets')]
+    ]
     
-    await update.message.reply_text(text)
+    await update.message.reply_text(
+        "👑 *Админ-панель*\n\nВыберите раздел:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
 
 # ========== ТЕСТ GOOGLE SHEETS ==========
 async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1726,6 +1737,7 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Тест-город",
                 "⏳ Ожидает",
                 "",
+                "",
                 ""
             ]
             sheet.append_row(test_row)
@@ -1740,12 +1752,14 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== ЗАПУСК ==========
 def main():
     init_database()
-    start_sheet_monitoring()  # Запускаем мониторинг Google Sheets
+    start_sheet_monitoring()
     
     application = Application.builder().token(TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("admin", admin_requests))
+    application.add_handler(CommandHandler("admin", admin_menu))
+    application.add_handler(CommandHandler("withdrawals", admin_withdrawals))
+    application.add_handler(CommandHandler("tickets", admin_tickets))
     application.add_handler(CommandHandler("testgoogle", test_google))
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(CallbackQueryHandler(next_question_callback, pattern='^next_question$'))
@@ -1756,21 +1770,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
