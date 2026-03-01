@@ -123,7 +123,7 @@ def get_google_sheet():
         return None
 
 def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, city):
-    """Добавляет запись о курьере в Google Sheets с кнопками"""
+    """Добавляет запись о курьере в Google Sheets с чекбоксами"""
     try:
         sheet = get_google_sheet()
         if not sheet:
@@ -137,8 +137,8 @@ def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, c
             full_name,
             city,
             "⏳ Ожидает",  # Статус
-            "",  # Для кнопки Да
-            ""   # Для кнопки Нет
+            False,  # Чекбокс для подтверждения (изначально не отмечен)
+            False   # Чекбокс для отклонения (изначально не отмечен)
         ]
         new_row = sheet.append_row(row, value_input_option='USER_ENTERED')
         
@@ -147,11 +147,11 @@ def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, c
         all_records = sheet.get_all_records()
         row_number = len(all_records) + 1
         
-        # Добавляем формулы для кнопок
-        sheet.update_cell(row_number, 7, f'=HYPERLINK("#", "✅")')
-        sheet.update_cell(row_number, 8, f'=HYPERLINK("#", "❌")')
+        # Преобразуем ячейки в чекбоксы
+        sheet.format(f"G{row_number}", {"checkbox": True})
+        sheet.format(f"H{row_number}", {"checkbox": True})
         
-        logger.info(f"✅ Курьер {full_name} добавлен в Google Sheets (строка {row_number})")
+        logger.info(f"✅ Курьер {full_name} добавлен в Google Sheets (строка {row_number}) с чекбоксами")
         return True, row_number
     except Exception as e:
         logger.error(f"Ошибка добавления в Google Sheets: {e}")
@@ -174,6 +174,14 @@ def check_pending_couriers():
             if not full_name or not city:
                 continue
             
+            # Получаем значения чекбоксов (True/False)
+            checkbox_confirm = sheet.acell(f"G{idx}").value
+            checkbox_reject = sheet.acell(f"H{idx}").value
+            
+            # Преобразуем в булевы значения
+            is_confirm = checkbox_confirm == 'TRUE'
+            is_reject = checkbox_reject == 'TRUE'
+            
             # Для каждого курьера создаем НОВОЕ соединение
             conn = get_db()
             c = conn.cursor()
@@ -188,43 +196,41 @@ def check_pending_couriers():
                 if courier:
                     courier_id, recruiter_id = courier
                     
-                    # Проверяем ячейки с кнопками (G и H)
-                    try:
-                        cell_g = sheet.cell(idx, 7).value  # Колонка G (✅)
-                        cell_h = sheet.cell(idx, 8).value  # Колонка H (❌)
+                    # Проверяем чекбоксы
+                    if is_confirm:
+                        # Подтверждаем курьера
+                        c.execute('''UPDATE couriers 
+                                     SET status = 'confirmed', confirmed_at = ? 
+                                     WHERE id = ?''', 
+                                  (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), courier_id))
                         
-                        # Проверяем, нажата ли кнопка подтверждения
-                        if cell_g and "✅" in str(cell_g):
-                            # Подтверждаем курьера
-                            c.execute('''UPDATE couriers 
-                                         SET status = 'confirmed', confirmed_at = ? 
-                                         WHERE id = ?''', 
-                                      (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), courier_id))
-                            
-                            # Обновляем статус в Google Sheets
-                            sheet.update_cell(idx, 6, "✅ Подтвержден")
-                            
-                            logger.info(f"✅ Курьер {full_name} подтвержден (строка {idx})")
-                            
-                        elif cell_h and "❌" in str(cell_h):
-                            # Отклоняем курьера
-                            c.execute('''UPDATE couriers 
-                                         SET status = 'rejected' 
-                                         WHERE id = ?''', (courier_id,))
-                            
-                            # Обновляем статус в Google Sheets
-                            sheet.update_cell(idx, 6, "❌ Отклонен")
-                            
-                            logger.info(f"❌ Курьер {full_name} отклонен (строка {idx})")
-                            
-                        conn.commit()
+                        # Обновляем статус в Google Sheets
+                        sheet.update_cell(idx, 6, "✅ Подтвержден")
                         
-                    except Exception as e:
-                        logger.error(f"Ошибка при проверке строки {idx}: {e}")
-                        conn.rollback()
+                        # Снимаем отметку с чекбокса
+                        sheet.update_cell(idx, 7, "FALSE")
+                        
+                        logger.info(f"✅ Курьер {full_name} подтвержден (строка {idx})")
+                        
+                    elif is_reject:
+                        # Отклоняем курьера
+                        c.execute('''UPDATE couriers 
+                                     SET status = 'rejected' 
+                                     WHERE id = ?''', (courier_id,))
+                        
+                        # Обновляем статус в Google Sheets
+                        sheet.update_cell(idx, 6, "❌ Отклонен")
+                        
+                        # Снимаем отметку с чекбокса
+                        sheet.update_cell(idx, 8, "FALSE")
+                        
+                        logger.info(f"❌ Курьер {full_name} отклонен (строка {idx})")
+                        
+                    conn.commit()
                         
             except Exception as e:
                 logger.error(f"Ошибка при обработке курьера {full_name}: {e}")
+                conn.rollback()
             finally:
                 conn.close()  # Закрываем соединение для каждого курьера
                 
@@ -1683,6 +1689,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
