@@ -263,14 +263,14 @@ def start_sheet_monitoring():
         while True:
             try:
                 check_pending_couriers()
-                time.sleep(60)  # Проверяем каждую минуту
+                time.sleep(300)  # Проверяем каждые 5 минут вместо 1 минуты
             except Exception as e:
                 logger.error(f"Ошибка в мониторинге: {e}")
-                time.sleep(60)
+                time.sleep(300)
     
     thread = threading.Thread(target=monitor_worker, daemon=True)
     thread.start()
-    logger.info("✅ Мониторинг Google Sheets запущен")
+    logger.info("✅ Мониторинг Google Sheets запущен (интервал 5 минут)")
 
 # ========== ФУНКЦИИ ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕЙ ==========
 # ========== ФУНКЦИИ ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕЙ ==========
@@ -1756,3 +1756,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
