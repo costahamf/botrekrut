@@ -640,6 +640,16 @@ def add_courier(recruiter_id, full_name, city):
     conn = get_db()
     c = conn.cursor()
     try:
+        logger.info(f"📝 ПОПЫТКА ДОБАВИТЬ КУРЬЕРА: {full_name}, {city} от рекрутера {recruiter_id}")
+        
+        # Проверяем, есть ли вообще пользователь с таким ID
+        c.execute("SELECT * FROM users WHERE user_id = ?", (recruiter_id,))
+        user = c.fetchone()
+        if user:
+            logger.info(f"   ✅ Рекрутер найден: {user[2]} (@{user[1]})")
+        else:
+            logger.error(f"   ❌ Рекрутер с ID {recruiter_id} НЕ НАЙДЕН!")
+        
         # Проверяем, нет ли уже такого курьера у этого рекрутера
         c.execute('''SELECT id FROM couriers 
                      WHERE recruiter_id = ? AND full_name = ? AND city = ? AND status = 'confirmed' ''',
@@ -647,15 +657,30 @@ def add_courier(recruiter_id, full_name, city):
         exists = c.fetchone()
         
         if exists:
+            logger.info(f"   ⚠️ Курьер уже существует в БД с id={exists[0]}")
             return False, "Курьер с такими данными уже подтвержден"
         
         # Добавляем в БД со статусом pending
         registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logger.info(f"   📦 Вставляем в БД: {recruiter_id}, {full_name}, {city}, pending, {registered_at}")
+        
         c.execute('''INSERT INTO couriers 
                      (recruiter_id, full_name, city, status, registered_at)
                      VALUES (?, ?, ?, ?, ?)''',
                   (recruiter_id, full_name, city, 'pending', registered_at))
+        
+        # Проверяем, сколько строк затронуто
+        logger.info(f"   ✅ INSERT выполнен, rows affected: {conn.total_changes}")
         conn.commit()
+        
+        # Проверяем, что запись действительно добавилась
+        c.execute("SELECT * FROM couriers WHERE recruiter_id = ? ORDER BY id DESC LIMIT 1", (recruiter_id,))
+        last = c.fetchone()
+        if last:
+            logger.info(f"   ✅ Запись найдена в БД: id={last[0]}, {last[2]}, {last[3]}, статус {last[4]}")
+        else:
+            logger.error(f"   ❌ ЗАПИСЬ НЕ НАЙДЕНА В БД ПОСЛЕ INSERT!")
+            return False, "Ошибка при сохранении в БД"
         
         # Получаем данные рекрутера для Google Sheets
         c.execute("SELECT first_name, username FROM users WHERE user_id = ?", (recruiter_id,))
@@ -686,26 +711,12 @@ def add_courier(recruiter_id, full_name, city):
         
         return True, "Заявка на курьера отправлена на проверку! ✅"
     except Exception as e:
-        logger.error(f"Ошибка в add_courier: {e}")
+        logger.error(f"❌ Ошибка в add_courier: {e}")
+        import traceback
+        traceback.print_exc()
         return False, f"Ошибка: {str(e)}"
     finally:
         conn.close()
-
-def get_recruiter_couriers(recruiter_id):
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        c.execute('''SELECT full_name, city, status, registered_at, confirmed_at 
-                     FROM couriers 
-                     WHERE recruiter_id = ? 
-                     ORDER BY registered_at DESC''', (recruiter_id,))
-        return c.fetchall()
-    except Exception as e:
-        logger.error(f"Ошибка в get_recruiter_couriers: {e}")
-        return []
-    finally:
-        conn.close()
-
 # ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await delete_previous_message(update, context)
@@ -1742,6 +1753,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
