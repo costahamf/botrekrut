@@ -10,6 +10,8 @@ import uuid
 import os
 import threading
 import atexit
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 # Настройка логирования
 logging.basicConfig(
@@ -156,6 +158,57 @@ def start_auto_backup():
 # Сохраняем при выходе
 atexit.register(backup_database)
 
+# ========== GOOGLE SHEETS ИНТЕГРАЦИЯ ==========
+def get_google_sheet():
+    """Подключается к Google Sheets и возвращает рабочий лист"""
+    try:
+        scope = ['https://spreadsheets.google.com/feeds', 
+                 'https://www.googleapis.com/auth/drive']
+        
+        creds_json = os.environ.get('GOOGLE_CREDS_JSON')
+        
+        if creds_json:
+            creds_dict = json.loads(creds_json)
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        else:
+            creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+        
+        client = gspread.authorize(creds)
+        
+        sheet_id = os.environ.get('GOOGLE_SHEET_ID', '')
+        if not sheet_id:
+            logger.error("GOOGLE_SHEET_ID не задан")
+            return None
+            
+        sheet = client.open_by_key(sheet_id).sheet1
+        logger.info("✅ Подключение к Google Sheets установлено")
+        return sheet
+    except Exception as e:
+        logger.error(f"Ошибка подключения к Google Sheets: {e}")
+        return None
+
+def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, city):
+    """Добавляет запись о курьере в Google Sheets"""
+    try:
+        sheet = get_google_sheet()
+        if not sheet:
+            return False
+        
+        row = [
+            datetime.now().strftime("%d.%m.%Y %H:%M"),
+            recruiter_name,
+            f"@{recruiter_username}" if recruiter_username else "-",
+            full_name,
+            city
+        ]
+        sheet.append_row(row)
+        logger.info(f"✅ Курьер {full_name} добавлен в Google Sheets")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка добавления в Google Sheets: {e}")
+        return False
+
+# ========== ФУНКЦИИ ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕЙ ==========
 def is_registered(user_id):
     conn = get_db()
     c = conn.cursor()
@@ -434,7 +487,7 @@ def confirm_withdrawal(request_id):
 
 # ========== ФУНКЦИИ ДЛЯ КУРЬЕРОВ ==========
 def add_courier(recruiter_id, full_name, city):
-    """Добавляет курьера в базу"""
+    """Добавляет курьера в базу и Google Sheets"""
     conn = get_db()
     c = conn.cursor()
     
@@ -445,6 +498,7 @@ def add_courier(recruiter_id, full_name, city):
     exists = c.fetchone()
     
     if exists:
+        conn.close()
         return False, "Курьер с такими данными уже записан"
     
     registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -452,6 +506,26 @@ def add_courier(recruiter_id, full_name, city):
                  VALUES (?, ?, ?, ?)''',
               (recruiter_id, full_name, city, registered_at))
     conn.commit()
+    
+    # Получаем данные рекрутера для Google Sheets
+    c.execute("SELECT first_name, username FROM users WHERE user_id = ?", (recruiter_id,))
+    recruiter = c.fetchone()
+    recruiter_name = recruiter[0] if recruiter else "Неизвестно"
+    recruiter_username = recruiter[1] if recruiter else ""
+    
+    conn.close()
+    
+    # Отправляем в Google Sheets (в отдельном потоке, чтобы не тормозить бота)
+    try:
+        threading.Thread(
+            target=add_courier_to_google_sheet,
+            args=(recruiter_name, recruiter_username, full_name, city),
+            daemon=True
+        ).start()
+        logger.info(f"Запущена отправка в Google Sheets для курьера {full_name}")
+    except Exception as e:
+        logger.error(f"Ошибка запуска потока для Google Sheets: {e}")
+    
     return True, "Курьер успешно записан"
 
 def get_recruiter_couriers(recruiter_id):
@@ -463,6 +537,49 @@ def get_recruiter_couriers(recruiter_id):
                  WHERE recruiter_id = ? 
                  ORDER BY registered_at DESC''', (recruiter_id,))
     return c.fetchall()
+
+# ========== ФУНКЦИИ ДЛЯ УДАЛЕНИЯ СООБЩЕНИЙ ==========
+async def delete_previous_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Удаляет предыдущее сообщение бота"""
+    try:
+        if 'last_bot_message_id' in context.user_data and 'last_chat_id' in context.user_data:
+            await context.bot.delete_message(
+                chat_id=context.user_data['last_chat_id'],
+                message_id=context.user_data['last_bot_message_id']
+            )
+    except Exception:
+        pass
+
+async def send_and_track(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=None):
+    """Отправляет сообщение и сохраняет его ID"""
+    await delete_previous_message(update, context)
+    
+    if update.callback_query:
+        message = await update.callback_query.message.reply_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode
+        )
+    else:
+        message = await update.message.reply_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode
+        )
+    
+    context.user_data['last_bot_message_id'] = message.message_id
+    context.user_data['last_chat_id'] = message.chat_id
+    return message
+
+async def edit_and_track(query, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=None):
+    """Редактирует сообщение и сохраняет ID"""
+    await query.edit_message_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode
+    )
+    context.user_data['last_bot_message_id'] = query.message.message_id
+    context.user_data['last_chat_id'] = query.message.chat_id
 
 # ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1337,17 +1454,16 @@ async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
             update, context,
             "📭 Нет активных обращений в поддержку"
         )
-        return
-    
-    text = "🆘 *Активные обращения в поддержку:*\n\n"
-    for ticket in tickets:
-        text += f"🆔 *{ticket[0]}*\n"
-        text += f"👤 {ticket[3]} (@{ticket[2]})\n"
-        text += f"📝 {ticket[4][:100]}...\n"
-        text += f"📅 {ticket[5]}\n"
-        text += "─" * 20 + "\n"
-    
-    await send_and_track(update, context, text, parse_mode='Markdown')
+    else:
+        text = "🆘 *Активные обращения в поддержку:*\n\n"
+        for ticket in tickets:
+            text += f"🆔 *{ticket[0]}*\n"
+            text += f"👤 {ticket[3]} (@{ticket[2]})\n"
+            text += f"📝 {ticket[4][:100]}...\n"
+            text += f"📅 {ticket[5]}\n"
+            text += "─" * 20 + "\n"
+        
+        await send_and_track(update, context, text, parse_mode='Markdown')
     
     withdrawals = get_pending_withdrawals()
     
