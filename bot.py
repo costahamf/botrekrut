@@ -301,9 +301,15 @@ def update_test_status(user_id, passed):
     conn = get_db()
     c = conn.cursor()
     try:
+        logger.info(f"📝 Обновление test_passed для user_id={user_id} на {1 if passed else 0}")
         c.execute("UPDATE users SET test_passed = ?, last_test_attempt = ? WHERE user_id = ?",
                   (1 if passed else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
         conn.commit()
+        
+        # Проверяем, обновилось ли
+        c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
+        new_value = c.fetchone()
+        logger.info(f"   ✅ После обновления test_passed={new_value[0] if new_value else None}")
     except Exception as e:
         logger.error(f"Ошибка в update_test_status: {e}")
     finally:
@@ -1355,7 +1361,10 @@ async def finish_test(query, context):
     correct_count = sum(1 for a in answers if a)
     user_id = query.from_user.id
     
+    logger.info(f"🎯 Тест завершен для user_id={user_id}, правильных ответов: {correct_count}")
+    
     if correct_count >= 7:
+        logger.info(f"✅ Тест ПРОЙДЕН! Обновляем test_passed для {user_id}")
         update_test_status(user_id, True)
         text = (
             f"🎉 *Тест пройден!*\n\n"
@@ -1363,7 +1372,17 @@ async def finish_test(query, context):
             f"✅ Вам открыт полный доступ ко всем разделам!"
         )
         keyboard = [[InlineKeyboardButton("🏠 В главное меню", callback_data='back_to_main')]]
+        
+        # Проверим сразу после обновления
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
+        new_val = c.fetchone()
+        logger.info(f"🔍 Проверка после обновления: test_passed={new_val[0] if new_val else None}")
+        conn.close()
+        
     elif correct_count < 3:
+        logger.info(f"❌ Тест НЕ ПРОЙДЕН (блокировка 30 мин) для {user_id}")
         update_test_status(user_id, False)
         text = (
             f"❌ *Тест не пройден*\n\n"
@@ -1372,6 +1391,7 @@ async def finish_test(query, context):
         )
         keyboard = [[InlineKeyboardButton("🏠 В главное меню", callback_data='back_to_main')]]
     else:
+        logger.info(f"⚠️ Тест НЕ ПРОЙДЕН (можно пересдать) для {user_id}")
         update_test_status(user_id, False)
         text = (
             f"⚠️ *Тест не пройден*\n\n"
@@ -1390,7 +1410,6 @@ async def finish_test(query, context):
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
-
 # ========== МЕНЮ ИНФОРМАЦИИ ==========
 async def show_all_info_menu(query, context):
     keyboard = [
@@ -1770,3 +1789,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
