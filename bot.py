@@ -26,7 +26,7 @@ CALCULATOR_URL = "https://eda.yandex.ru/partner/perf/samara/?utm_medium=cpc&utm_
 
 # Инициализация базы данных
 def init_database():
-    conn = sqlite3.connect('/data/users.db')
+    conn = sqlite3.connect('users.db')
     c = conn.cursor()
     
     c.execute('''CREATE TABLE IF NOT EXISTS users
@@ -54,7 +54,7 @@ def init_database():
     logger.info("База данных инициализирована")
 
 def get_db():
-    return sqlite3.connect('/data/users.db', check_same_thread=False)
+    return sqlite3.connect('users.db', check_same_thread=False)
 
 def is_registered(user_id):
     conn = get_db()
@@ -661,3 +661,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
