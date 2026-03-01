@@ -27,6 +27,49 @@ PERSONAL_ACCOUNT_URL = "https://partners-app.yandex.ru/team_ref/8647844ed8ee4d0e
 # URL для калькулятора дохода
 CALCULATOR_URL = "https://eda.yandex.ru/partner/perf/samara/?utm_medium=cpc&utm_source=yandex-hr&utm_campaign=%5BEDA%5DMX_Courier_RU-ALL-1M_Brand_search_NU%7C73792274&utm_term=49415175552%7C---autotargeting&utm_content=k50id%7C0100000049415175552_49415175552%7Ccid%7C73792274%7Cgid%7C5378729251%7Caid%7C15662855932%7Cadp%7Cno%7Cpos%7Cpremium1%7Csrc%7Csearch_none%7Cdvc%7Cdesktop%7Cmain&etext=2202.H1-umiWOxa1IhaqocPaUS69zT9wHAZdkgZEGqorPY5rJ_ebzkat1FDn2yZO3bEqDYssRPcp0IyJXzD9sTJXJ7293dG14ZXB1Z2VrdW1hemM.0d27564e0c3a01c61971ab0f3d5b481a3ae88ee1&yclid=14506292526793097215"
 
+# ========== ФУНКЦИИ ДЛЯ УДАЛЕНИЯ СООБЩЕНИЙ ==========
+async def delete_previous_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Удаляет предыдущее сообщение бота"""
+    try:
+        if 'last_bot_message_id' in context.user_data and 'last_chat_id' in context.user_data:
+            await context.bot.delete_message(
+                chat_id=context.user_data['last_chat_id'],
+                message_id=context.user_data['last_bot_message_id']
+            )
+    except Exception:
+        pass
+
+async def send_and_track(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=None):
+    """Отправляет сообщение и сохраняет его ID"""
+    await delete_previous_message(update, context)
+    
+    if update.callback_query:
+        message = await update.callback_query.message.reply_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode
+        )
+    else:
+        message = await update.message.reply_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode
+        )
+    
+    context.user_data['last_bot_message_id'] = message.message_id
+    context.user_data['last_chat_id'] = message.chat_id
+    return message
+
+async def edit_and_track(query, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode=None):
+    """Редактирует сообщение и сохраняет ID"""
+    await query.edit_message_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode
+    )
+    context.user_data['last_bot_message_id'] = query.message.message_id
+    context.user_data['last_chat_id'] = query.message.chat_id
+
 # ========== ТЕСТОВЫЕ ВОПРОСЫ ==========
 TEST_QUESTIONS = [
     {
@@ -143,11 +186,9 @@ def init_database():
                   first_name TEXT,
                   last_name TEXT,
                   registration_date TEXT,
-                  balance REAL DEFAULT 0,
                   test_passed INTEGER DEFAULT 0,
                   test_attempts INTEGER DEFAULT 0,
-                  last_test_attempt TEXT,
-                  withdrawal_info TEXT)''')
+                  last_test_attempt TEXT)''')
     
     # Таблица заявок на вывод
     c.execute('''CREATE TABLE IF NOT EXISTS withdrawals
@@ -160,7 +201,7 @@ def init_database():
                   request_date TEXT,
                   FOREIGN KEY (user_id) REFERENCES users (user_id))''')
     
-    # ===== НОВАЯ ТАБЛИЦА ДЛЯ ПОДДЕРЖКИ =====
+    # Таблица тикетов поддержки
     c.execute('''CREATE TABLE IF NOT EXISTS support_tickets
                  (ticket_id TEXT PRIMARY KEY,
                   user_id INTEGER,
@@ -172,6 +213,15 @@ def init_database():
                   answered_at TEXT,
                   admin_reply TEXT,
                   FOREIGN KEY (user_id) REFERENCES users (user_id))''')
+    
+    # Таблица курьеров
+    c.execute('''CREATE TABLE IF NOT EXISTS couriers
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  recruiter_id INTEGER,
+                  full_name TEXT,
+                  city TEXT,
+                  registered_at TEXT,
+                  FOREIGN KEY (recruiter_id) REFERENCES users (user_id))''')
     
     conn.commit()
     conn.close()
@@ -236,7 +286,7 @@ def create_support_ticket(user_id, username, first_name, message):
     """Создает новый тикет поддержки"""
     conn = get_db()
     c = conn.cursor()
-    ticket_id = str(uuid.uuid4())[:8]  # Короткий ID тикета
+    ticket_id = str(uuid.uuid4())[:8]
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     c.execute('''INSERT INTO support_tickets 
@@ -249,7 +299,6 @@ def create_support_ticket(user_id, username, first_name, message):
     return ticket_id
 
 def get_open_tickets():
-    """Получает все открытые тикеты"""
     conn = get_db()
     c = conn.cursor()
     c.execute('''SELECT ticket_id, user_id, username, first_name, message, created_at 
@@ -261,7 +310,6 @@ def get_open_tickets():
     return tickets
 
 def get_ticket(ticket_id):
-    """Получает информацию о тикете"""
     conn = get_db()
     c = conn.cursor()
     c.execute('''SELECT * FROM support_tickets WHERE ticket_id = ?''', (ticket_id,))
@@ -270,7 +318,6 @@ def get_ticket(ticket_id):
     return ticket
 
 def close_ticket(ticket_id, admin_reply):
-    """Закрывает тикет и сохраняет ответ админа"""
     conn = get_db()
     c = conn.cursor()
     answered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -281,14 +328,90 @@ def close_ticket(ticket_id, admin_reply):
     conn.commit()
     conn.close()
 
+# ========== ФУНКЦИИ ДЛЯ ВЫВОДА ==========
+def create_withdrawal_request(user_id, amount, method, details):
+    """Создает заявку на вывод"""
+    conn = get_db()
+    c = conn.cursor()
+    request_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute('''INSERT INTO withdrawals 
+                 (user_id, amount, payment_method, payment_details, request_date) 
+                 VALUES (?, ?, ?, ?, ?)''',
+              (user_id, amount, method, details, request_date))
+    request_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return request_id
+
+def get_pending_withdrawals():
+    """Получает все ожидающие заявки на вывод"""
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('''SELECT w.id, w.user_id, u.first_name, u.username, 
+                        w.amount, w.payment_method, w.payment_details, w.request_date
+                 FROM withdrawals w
+                 JOIN users u ON w.user_id = u.user_id
+                 WHERE w.status = 'pending'
+                 ORDER BY w.request_date ASC''')
+    requests = c.fetchall()
+    conn.close()
+    return requests
+
+def confirm_withdrawal(request_id):
+    """Подтверждает заявку на вывод"""
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("UPDATE withdrawals SET status = 'completed' WHERE id = ?", (request_id,))
+    conn.commit()
+    conn.close()
+
+# ========== ФУНКЦИИ ДЛЯ КУРЬЕРОВ ==========
+def add_courier(recruiter_id, full_name, city):
+    """Добавляет курьера в базу"""
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Проверяем, нет ли уже такого курьера у этого рекрутера
+    c.execute('''SELECT id FROM couriers 
+                 WHERE recruiter_id = ? AND full_name = ? AND city = ?''',
+              (recruiter_id, full_name, city))
+    exists = c.fetchone()
+    
+    if exists:
+        conn.close()
+        return False, "Курьер с такими данными уже записан"
+    
+    registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute('''INSERT INTO couriers (recruiter_id, full_name, city, registered_at)
+                 VALUES (?, ?, ?, ?)''',
+              (recruiter_id, full_name, city, registered_at))
+    conn.commit()
+    conn.close()
+    return True, "Курьер успешно записан"
+
+def get_recruiter_couriers(recruiter_id):
+    """Получает всех курьеров рекрутера"""
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('''SELECT full_name, city, registered_at 
+                 FROM couriers 
+                 WHERE recruiter_id = ? 
+                 ORDER BY registered_at DESC''', (recruiter_id,))
+    couriers = c.fetchall()
+    conn.close()
+    return couriers
+
 # ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await delete_previous_message(update, context)
+    
     user = update.effective_user
     user_id = user.id
     
     if not is_registered(user_id):
         register_user(user_id, user.username, user.first_name, user.last_name)
-        await update.message.reply_text(
+        await send_and_track(
+            update, context,
             f"👋 Добро пожаловать, {user.first_name}!\n\n"
             "Вы успешно зарегистрированы в системе."
         )
@@ -305,7 +428,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📋 Вся информация", callback_data='all_info')],
             [InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')],
             [InlineKeyboardButton("💰 Вывод средств", callback_data='withdrawal')],
-            [InlineKeyboardButton("👤 Личный кабинет", url=PERSONAL_ACCOUNT_URL)],
+            [InlineKeyboardButton("👤 Личный кабинет", callback_data='personal_account')],
             [InlineKeyboardButton("🆘 Обратиться в поддержку", callback_data='support')]
         ]
         menu_text = "🏠 *Главное меню*\n\nВыберите нужный раздел:"
@@ -316,7 +439,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         menu_text = "📚 *Для доступа к полному функционалу необходимо пройти тест*\n\nВыберите действие:"
     
-    await update.message.reply_text(
+    await send_and_track(
+        update, context,
         menu_text,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
@@ -329,12 +453,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     data = query.data
     
-    # ===== ОБРАБОТКА АДМИНСКИХ КНОПОК =====
+    # Обработка админских кнопок
     if data.startswith('admin_reply_'):
         await admin_reply_callback(update, context)
         return
     elif data.startswith('admin_close_'):
         await admin_close_callback(update, context)
+        return
+    elif data.startswith('withdrawal_confirm_'):
+        await admin_withdrawal_confirm(update, context)
         return
     elif data == 'next_question':
         await next_question_callback(update, context)
@@ -348,10 +475,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     test_passed = result[0] if result else 0
     conn.close()
     
-    protected_sections = ['withdrawal', 'check_balance', 'withdrawal_card', 'withdrawal_yoomoney', 'withdrawal_other']
+    protected_sections = ['withdrawal', 'personal_account', 'my_couriers', 'add_courier']
     if test_passed == 0 and data in protected_sections:
         keyboard = [[InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')]]
-        await query.edit_message_text(
+        await edit_and_track(
+            query, context,
             "❌ *Доступ запрещен!*\n\nДля доступа к этому разделу необходимо пройти тест.",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
@@ -360,31 +488,30 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Обработка остальных callback'ов
     if data == 'all_info':
-        await show_all_info_menu(query)
+        await show_all_info_menu(query, context)
     elif data == 'take_test':
         await start_test(query, user_id, context)
     elif data == 'withdrawal':
-        await withdrawal_menu(query, user_id)
+        await withdrawal_menu(query, user_id, context)
+    elif data == 'personal_account':
+        await personal_account_menu(query, user_id, context)
+    elif data == 'my_couriers':
+        await show_my_couriers(query, user_id, context)
+    elif data == 'add_courier':
+        await add_courier_start(query, user_id, context)
     elif data == 'support':
         await support_start(query, user_id, context)
-    elif data == 'send_support_message':
-        await support_request_message(query, context)
     elif data.startswith('info_'):
-        await show_info_section(query)
-    elif data.startswith('withdrawal_') and data not in ['withdrawal']:
-        await process_withdrawal_option(query, user_id, context)
-    elif data == 'check_balance':
-        await check_balance(query, user_id)
+        await show_info_section(query, context)
     elif data == 'back_to_main':
-        await back_to_main(query, user_id)
+        await back_to_main(query, user_id, context)
     elif data == 'back_to_info':
-        await show_all_info_menu(query)
+        await show_all_info_menu(query, context)
     elif data.startswith('answer_'):
         await handle_test_answer(query, user_id, context)
 
 # ========== ПОДДЕРЖКА ==========
 async def support_start(query, user_id, context):
-    """Начало обращения в поддержку"""
     text = (
         "🆘 *Поддержка*\n\n"
         "Опишите вашу проблему или вопрос. Я передам сообщение администратору.\n\n"
@@ -393,7 +520,8 @@ async def support_start(query, user_id, context):
     )
     
     keyboard = [[InlineKeyboardButton("🔙 Отмена", callback_data='back_to_main')]]
-    await query.edit_message_text(
+    await edit_and_track(
+        query, context,
         text,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
@@ -401,20 +529,10 @@ async def support_start(query, user_id, context):
     
     context.user_data['awaiting_support_message'] = True
 
-async def support_request_message(query, context):
-    """Запрос на ввод сообщения (заглушка для callback)"""
-    await query.edit_message_text(
-        "📝 Напишите ваш вопрос в чат:",
-        parse_mode='Markdown'
-    )
-    context.user_data['awaiting_support_message'] = True
-
 async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка сообщения в поддержку"""
     user = update.effective_user
     message_text = update.message.text
     
-    # Создаем тикет
     ticket_id = create_support_ticket(
         user.id,
         user.username,
@@ -422,8 +540,9 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
         message_text
     )
     
-    # Отправляем подтверждение пользователю
-    await update.message.reply_text(
+    await delete_previous_message(update, context)
+    await send_and_track(
+        update, context,
         f"✅ *Ваше обращение принято!*\n\n"
         f"🆔 Номер обращения: `{ticket_id}`\n"
         f"⏱ Ожидаемое время ответа: от 15 минут до 1 часа\n\n"
@@ -431,7 +550,6 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode='Markdown'
     )
     
-    # Отправляем уведомление админу
     keyboard = [
         [InlineKeyboardButton("📨 Ответить", callback_data=f'admin_reply_{ticket_id}')],
         [InlineKeyboardButton("✅ Закрыть", callback_data=f'admin_close_{ticket_id}')]
@@ -456,7 +574,6 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data['awaiting_support_message'] = False
 
 async def admin_reply_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Админ отвечает на тикет"""
     query = update.callback_query
     await query.answer()
     
@@ -473,7 +590,6 @@ async def admin_reply_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 async def admin_close_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Админ закрывает тикет без ответа"""
     query = update.callback_query
     await query.answer()
     
@@ -487,9 +603,8 @@ async def admin_close_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     if ticket:
         close_ticket(ticket_id, "Тикет закрыт администратором")
         
-        # Уведомляем пользователя
         await context.bot.send_message(
-            chat_id=ticket[1],  # user_id
+            chat_id=ticket[1],
             text=f"🆘 *Обращение #{ticket_id} закрыто*\n\nВаш тикет был закрыт администратором.",
             parse_mode='Markdown'
         )
@@ -499,7 +614,6 @@ async def admin_close_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text("❌ Тикет не найден")
 
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка ответа админа на тикет"""
     if update.effective_user.id != ADMIN_ID:
         return
     
@@ -511,10 +625,8 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ticket = get_ticket(ticket_id)
     
     if ticket:
-        # Закрываем тикет с ответом
         close_ticket(ticket_id, reply_text)
         
-        # Отправляем ответ пользователю
         user_message = (
             f"🆘 *Ответ на обращение #{ticket_id}*\n\n"
             f"📝 *Ваш вопрос:*\n{ticket[4]}\n\n"
@@ -523,35 +635,256 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         
         await context.bot.send_message(
-            chat_id=ticket[1],  # user_id
+            chat_id=ticket[1],
             text=user_message,
             parse_mode='Markdown'
         )
         
-        # Подтверждение админу
         await update.message.reply_text(f"✅ Ответ на тикет {ticket_id} отправлен пользователю")
-        
-        # Обновляем сообщение с тикетом в чате админа
-        keyboard = [
-            [InlineKeyboardButton("✅ Уже ответил", callback_data=f'admin_done_{ticket_id}')]
-        ]
-        
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=f"✅ Ответ на тикет {ticket_id} отправлен",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
     else:
         await update.message.reply_text("❌ Тикет не найден")
     
     context.user_data['replying_to_ticket'] = None
+
+# ========== ЛИЧНЫЙ КАБИНЕТ ==========
+async def personal_account_menu(query, user_id, context):
+    keyboard = [
+        [InlineKeyboardButton("🔑 Войти в кабинет", url=PERSONAL_ACCOUNT_URL)],
+        [InlineKeyboardButton("👥 Список моих курьеров", callback_data='my_couriers')],
+        [InlineKeyboardButton("📝 Записать курьера", callback_data='add_courier')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]
+    ]
+    
+    await edit_and_track(
+        query, context,
+        "👤 *Личный кабинет*\n\nВыберите действие:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+
+async def show_my_couriers(query, user_id, context):
+    couriers = get_recruiter_couriers(user_id)
+    
+    if not couriers:
+        text = "📭 *У вас пока нет записанных курьеров*"
+    else:
+        text = "👥 *Ваши курьеры:*\n\n"
+        for i, (name, city, date) in enumerate(couriers, 1):
+            date_obj = datetime.strptime(date, "%Y-%m-%d %H:%M:%S")
+            date_str = date_obj.strftime("%d.%m.%Y")
+            text += f"{i}. *{name}* — {city}\n"
+            text += f"   📅 {date_str}\n\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("📝 Записать курьера", callback_data='add_courier')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='personal_account')]
+    ]
+    
+    await edit_and_track(
+        query, context,
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+
+async def add_courier_start(query, user_id, context):
+    text = (
+        "📝 *Запись курьера*\n\n"
+        "Введите данные курьера в формате:\n"
+        "`Фамилия Имя, Город`\n\n"
+        "Например:\n"
+        "`Иванов Иван, Москва`"
+    )
+    
+    keyboard = [[InlineKeyboardButton("🔙 Отмена", callback_data='personal_account')]]
+    await edit_and_track(
+        query, context,
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    
+    context.user_data['awaiting_courier_data'] = True
+
+async def handle_courier_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+    
+    try:
+        if ',' not in text:
+            await send_and_track(
+                update, context,
+                "❌ Неверный формат. Используйте: Фамилия Имя, Город\n"
+                "Пример: Иванов Иван, Москва"
+            )
+            return
+        
+        full_name, city = text.split(',', 1)
+        full_name = full_name.strip()
+        city = city.strip()
+        
+        if not full_name or not city:
+            await send_and_track(
+                update, context,
+                "❌ Имя и город не могут быть пустыми"
+            )
+            return
+        
+        success, message = add_courier(user_id, full_name, city)
+        
+        if success:
+            await send_and_track(
+                update, context,
+                f"✅ *Курьер успешно записан!*\n\n"
+                f"👤 *Имя:* {full_name}\n"
+                f"🏙 *Город:* {city}",
+                parse_mode='Markdown'
+            )
+        else:
+            await send_and_track(
+                update, context,
+                f"❌ {message}"
+            )
+        
+    except Exception as e:
+        await send_and_track(
+            update, context,
+            f"❌ Ошибка: {str(e)}"
+        )
+    
+    context.user_data['awaiting_courier_data'] = False
+    
+    keyboard = [
+        [InlineKeyboardButton("👥 Список курьеров", callback_data='my_couriers')],
+        [InlineKeyboardButton("📝 Записать ещё", callback_data='add_courier')],
+        [InlineKeyboardButton("🔙 В личный кабинет", callback_data='personal_account')]
+    ]
+    await send_and_track(
+        update, context,
+        "👤 *Личный кабинет*\n\nВыберите действие:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+
+# ========== ВЫВОД СРЕДСТВ ==========
+async def withdrawal_menu(query, user_id, context):
+    keyboard = [
+        [InlineKeyboardButton("💳 Карта", callback_data='withdrawal_card')],
+        [InlineKeyboardButton("📱 ЮMoney", callback_data='withdrawal_yoomoney')],
+        [InlineKeyboardButton("🔄 Другой способ", callback_data='withdrawal_other')],
+        [InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]
+    ]
+    
+    await edit_and_track(
+        query, context,
+        "💰 *Вывод средств*\n\nВыберите способ вывода:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+
+async def process_withdrawal_option(query, user_id, context):
+    method = query.data.replace('withdrawal_', '')
+    context.user_data['withdrawal_method'] = method
+    
+    keyboard = [[InlineKeyboardButton("🔙 Отмена", callback_data='withdrawal')]]
+    await edit_and_track(
+        query, context,
+        f"Выбран способ: *{method}*\n\n"
+        f"Введите сумму и реквизиты в формате:\n"
+        f"Сумма|Реквизиты\n\n"
+        f"Пример: 500|1234567890123456",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    
+    context.user_data['awaiting_withdrawal_details'] = True
+
+async def handle_withdrawal_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    text = update.message.text
+    
+    try:
+        amount, details = text.split('|')
+        amount = float(amount.strip())
+        details = details.strip()
+        method = context.user_data.get('withdrawal_method', 'unknown')
+        
+        if amount < 100:
+            await send_and_track(
+                update, context,
+                "❌ Минимальная сумма вывода: 100 руб."
+            )
+            return
+        
+        request_id = create_withdrawal_request(user.id, amount, method, details)
+        
+        await send_and_track(
+            update, context,
+            f"✅ *Заявка на вывод создана!*\n\n"
+            f"🆔 Номер заявки: `{request_id}`\n"
+            f"💰 Сумма: {amount} руб.\n"
+            f"💳 Способ: {method}\n\n"
+            f"Ожидайте подтверждения администратором.",
+            parse_mode='Markdown'
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Подтвердить", callback_data=f'withdrawal_confirm_{request_id}')]
+        ]
+        
+        admin_message = (
+            f"💰 *НОВАЯ ЗАЯВКА НА ВЫВОД*\n\n"
+            f"🆔 *Заявка:* `{request_id}`\n"
+            f"👤 *Пользователь:* {user.first_name} (@{user.username})\n"
+            f"🆔 *User ID:* `{user.id}`\n"
+            f"💰 *Сумма:* {amount} руб.\n"
+            f"💳 *Способ:* {method}\n"
+            f"📝 *Реквизиты:* {details}"
+        )
+        
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=admin_message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        
+    except ValueError:
+        await send_and_track(
+            update, context,
+            "❌ Неверный формат. Используйте: Сумма|Реквизиты\n"
+            "Пример: 500|1234567890123456"
+        )
+    except Exception as e:
+        await send_and_track(
+            update, context,
+            f"❌ Ошибка: {str(e)}"
+        )
+    
+    context.user_data['awaiting_withdrawal_details'] = False
+
+async def admin_withdrawal_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ У вас нет прав администратора")
+        return
+    
+    request_id = int(query.data.replace('withdrawal_confirm_', ''))
+    confirm_withdrawal(request_id)
+    
+    await query.edit_message_text(
+        f"✅ Заявка {request_id} подтверждена"
+    )
 
 # ========== ТЕСТИРОВАНИЕ ==========
 async def start_test(query, user_id, context):
     can_take, minutes_left = can_take_test(user_id)
     
     if not can_take:
-        await query.edit_message_text(
+        await edit_and_track(
+            query, context,
             f"⏳ *Тест временно недоступен*\n\n"
             f"Вы уже проходили тест недавно. Следующая попытка будет доступна через *{minutes_left} минут*.",
             parse_mode='Markdown'
@@ -580,7 +913,8 @@ async def show_test_question(query, context):
     
     keyboard.append([InlineKeyboardButton("❌ Отменить тест", callback_data='back_to_main')])
     
-    await query.edit_message_text(
+    await edit_and_track(
+        query, context,
         f"📝 *Вопрос {current + 1} из {len(questions)}*\n\n"
         f"{question['question']}",
         reply_markup=InlineKeyboardMarkup(keyboard),
@@ -588,44 +922,40 @@ async def show_test_question(query, context):
     )
 
 async def handle_test_answer(query, user_id, context):
-    """Обработка ответа на вопрос теста"""
     try:
         answer_index = int(query.data.replace('answer_', ''))
         current = context.user_data.get('test_current', 0)
         questions = context.user_data.get('test_questions', [])
         answers = context.user_data.get('test_answers', [])
         
-        # Проверяем, что вопросы существуют
         if not questions or current >= len(questions):
-            await query.edit_message_text("❌ Ошибка теста. Начните заново.")
+            await edit_and_track(
+                query, context,
+                "❌ Ошибка теста. Начните заново."
+            )
             return
         
-        # Получаем текущий вопрос
         question = questions[current]
         correct = question['correct']
         is_correct = (answer_index == correct)
         answers.append(is_correct)
         context.user_data['test_answers'] = answers
         
-        # Формируем текст ответа
         if is_correct:
             text = "✅ *Верно!*"
         else:
             correct_text = question['options'][correct]
             text = f"❌ *Неверно!*\nПравильный ответ: *{correct_text}*"
         
-        # Переходим к следующему вопросу
         context.user_data['test_current'] = current + 1
         
-        # Проверяем, не закончился ли тест
         if context.user_data['test_current'] >= len(questions):
-            # Тест завершен
             await finish_test(query, context)
             return
         
-        # Показываем результат и кнопку "Далее"
         keyboard = [[InlineKeyboardButton("➡️ Далее", callback_data='next_question')]]
-        await query.edit_message_text(
+        await edit_and_track(
+            query, context,
             text,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
@@ -633,31 +963,34 @@ async def handle_test_answer(query, user_id, context):
         
     except Exception as e:
         logger.error(f"Ошибка в handle_test_answer: {e}")
-        await query.edit_message_text("❌ Произошла ошибка. Начните тест заново.")
+        await edit_and_track(
+            query, context,
+            "❌ Произошла ошибка. Начните тест заново."
+        )
 
 async def next_question_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик для кнопки 'Далее'"""
     query = update.callback_query
     await query.answer()
     
     try:
-        # Проверяем, есть ли активный тест
         if 'test_current' not in context.user_data or 'test_questions' not in context.user_data:
-            await query.edit_message_text(
+            keyboard = [[InlineKeyboardButton("📝 Начать тест", callback_data='take_test')]]
+            await edit_and_track(
+                query, context,
                 "❌ Тест не найден. Начните заново.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("📝 Начать тест", callback_data='take_test')
-                ]])
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return
         
-        # Показываем следующий вопрос
         await show_test_question(query, context)
         
     except Exception as e:
         logger.error(f"Ошибка в next_question_callback: {e}")
-        await query.edit_message_text("❌ Произошла ошибка. Начните тест заново.")
-        
+        await edit_and_track(
+            query, context,
+            "❌ Произошла ошибка. Начните тест заново."
+        )
+
 async def finish_test(query, context):
     answers = context.user_data.get('test_answers', [])
     correct_count = sum(1 for a in answers if a)
@@ -692,14 +1025,15 @@ async def finish_test(query, context):
     context.user_data.pop('test_current', None)
     context.user_data.pop('test_questions', None)
     
-    await query.edit_message_text(
+    await edit_and_track(
+        query, context,
         text,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
 
 # ========== МЕНЮ ИНФОРМАЦИИ ==========
-async def show_all_info_menu(query):
+async def show_all_info_menu(query, context):
     keyboard = [
         [InlineKeyboardButton("📌 Если курьер нарушает правила", callback_data='info_rules_violation')],
         [InlineKeyboardButton("📢 Маркировка рекламы", callback_data='info_ad_marking')],
@@ -720,14 +1054,14 @@ async def show_all_info_menu(query):
         keyboard[8]
     ])
     
-    await query.edit_message_text(
-        "📋 *Вся информация*\n\n"
-        "Выберите интересующий вас раздел:",
+    await edit_and_track(
+        query, context,
+        "📋 *Вся информация*\n\nВыберите интересующий вас раздел:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
 
-async def show_info_section(query):
+async def show_info_section(query, context):
     section = query.data.replace('info_', '')
     
     info_texts = {
@@ -844,81 +1178,15 @@ async def show_info_section(query):
     else:
         keyboard = [[InlineKeyboardButton("🔙 Назад к разделам", callback_data='back_to_info')]]
     
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
+    await edit_and_track(
+        query, context,
         text,
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
-
-# ========== ВЫВОД СРЕДСТВ ==========
-async def withdrawal_menu(query, user_id):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-    result = c.fetchone()
-    conn.close()
-    
-    balance = result[0] if result else 0
-    
-    keyboard = [
-        [InlineKeyboardButton("💰 Проверить баланс", callback_data='check_balance')],
-        [InlineKeyboardButton("💳 Карта", callback_data='withdrawal_card')],
-        [InlineKeyboardButton("📱 ЮMoney", callback_data='withdrawal_yoomoney')],
-        [InlineKeyboardButton("🔄 Другой способ", callback_data='withdrawal_other')],
-        [InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        f"💸 *Вывод средств*\n\n"
-        f"Ваш баланс: *{balance} руб.*\n"
-        f"Минимальная сумма вывода: *100 руб.*\n\n"
-        f"Выберите способ вывода:",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
-
-async def process_withdrawal_option(query, user_id, context):
-    method = query.data.replace('withdrawal_', '')
-    context.user_data['withdrawal_method'] = method
-    
-    keyboard = [[InlineKeyboardButton("🔙 Отмена", callback_data='withdrawal')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        f"Выбран способ: *{method}*\n\n"
-        f"Введите сумму и реквизиты в формате:\n"
-        f"Сумма|Реквизиты\n\n"
-        f"Пример: 500|1234567890123456",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
-    
-    context.user_data['awaiting_withdrawal_details'] = True
-
-async def check_balance(query, user_id):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-    result = c.fetchone()
-    conn.close()
-    
-    balance = result[0] if result else 0
-    
-    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='withdrawal')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        f"💰 *Ваш баланс*\n\n"
-        f"Текущий баланс: *{balance} руб.*",
-        reply_markup=reply_markup,
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
 
 # ========== НАВИГАЦИЯ ==========
-async def back_to_main(query, user_id):
+async def back_to_main(query, user_id, context):
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
@@ -931,7 +1199,7 @@ async def back_to_main(query, user_id):
             [InlineKeyboardButton("📋 Вся информация", callback_data='all_info')],
             [InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')],
             [InlineKeyboardButton("💰 Вывод средств", callback_data='withdrawal')],
-            [InlineKeyboardButton("👤 Личный кабинет", url=PERSONAL_ACCOUNT_URL)],
+            [InlineKeyboardButton("👤 Личный кабинет", callback_data='personal_account')],
             [InlineKeyboardButton("🆘 Обратиться в поддержку", callback_data='support')]
         ]
         menu_text = "🏠 *Главное меню*\n\nВыберите нужный раздел:"
@@ -942,7 +1210,8 @@ async def back_to_main(query, user_id):
         ]
         menu_text = "📚 *Для доступа к полному функционалу необходимо пройти тест*\n\nВыберите действие:"
     
-    await query.edit_message_text(
+    await edit_and_track(
+        query, context,
         menu_text,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
@@ -952,84 +1221,43 @@ async def back_to_main(query, user_id):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # Проверяем, ожидаем ли мы сообщение для поддержки
     if context.user_data.get('awaiting_support_message'):
         await handle_support_message(update, context)
         return
     
-    # Проверяем, ожидаем ли мы ответ от админа на тикет
     if context.user_data.get('replying_to_ticket'):
         await handle_admin_reply(update, context)
         return
     
-    # Проверяем, ожидаем ли мы ввод для вывода средств
+    if context.user_data.get('awaiting_courier_data'):
+        await handle_courier_input(update, context)
+        return
+    
     if context.user_data.get('awaiting_withdrawal_details'):
-        try:
-            text = update.message.text
-            amount, details = text.split('|')
-            amount = float(amount.strip())
-            details = details.strip()
-            method = context.user_data.get('withdrawal_method', 'unknown')
-            
-            conn = get_db()
-            c = conn.cursor()
-            c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-            balance_row = c.fetchone()
-            balance = balance_row[0] if balance_row else 0
-            
-            if amount < 100:
-                await update.message.reply_text("❌ Минимальная сумма вывода: 100 руб.")
-            elif amount > balance:
-                await update.message.reply_text("❌ Недостаточно средств на балансе")
-            else:
-                request_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                c.execute("""INSERT INTO withdrawals 
-                           (user_id, amount, payment_method, payment_details, request_date) 
-                           VALUES (?, ?, ?, ?, ?)""",
-                           (user_id, amount, method, details, request_date))
-                conn.commit()
-                
-                # Уведомляем админа
-                await context.bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=f"💰 *Новая заявка на вывод*\n\n"
-                         f"Пользователь: {update.effective_user.first_name} (ID: {user_id})\n"
-                         f"Сумма: {amount} руб.\n"
-                         f"Способ: {method}\n"
-                         f"Реквизиты: {details}",
-                    parse_mode='Markdown'
-                )
-                
-                await update.message.reply_text(
-                    "✅ Заявка на вывод создана!\n"
-                    "Ожидайте обработки администратором."
-                )
-            
-            conn.close()
-            
-        except ValueError:
-            await update.message.reply_text(
-                "❌ Неверный формат. Используйте: Сумма|Реквизиты\n"
-                "Пример: 500|1234567890123456"
-            )
-        except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
-        
-        context.user_data['awaiting_withdrawal_details'] = False
-    else:
-        await update.message.reply_text("Используйте команду /start для навигации")
+        await handle_withdrawal_input(update, context)
+        return
+    
+    await send_and_track(
+        update, context,
+        "Используйте команду /start для навигации"
+    )
 
 # ========== АДМИН-КОМАНДЫ ==========
 async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ У вас нет прав администратора")
+        await send_and_track(
+            update, context,
+            "❌ У вас нет прав администратора"
+        )
         return
     
-    # Показываем открытые тикеты
     tickets = get_open_tickets()
     
     if not tickets:
-        await update.message.reply_text("📭 Нет активных обращений в поддержку")
+        await send_and_track(
+            update, context,
+            "📭 Нет активных обращений в поддержку"
+        )
         return
     
     text = "🆘 *Активные обращения в поддержку:*\n\n"
@@ -1040,43 +1268,22 @@ async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"📅 {ticket[5]}\n"
         text += "─" * 20 + "\n"
     
-    await update.message.reply_text(text, parse_mode='Markdown')
-
-async def admin_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ У вас нет прав администратора")
-        return
+    await send_and_track(update, context, text, parse_mode='Markdown')
     
-    try:
-        request_id = int(context.args[0])
+    withdrawals = get_pending_withdrawals()
+    
+    if withdrawals:
+        text = "💰 *Ожидающие заявки на вывод:*\n\n"
+        for w in withdrawals:
+            text += f"🆔 *{w[0]}*\n"
+            text += f"👤 {w[2]} (@{w[3]})\n"
+            text += f"💰 {w[4]} руб.\n"
+            text += f"💳 {w[5]}\n"
+            text += f"📝 {w[6]}\n"
+            text += f"📅 {w[7]}\n"
+            text += "─" * 20 + "\n"
         
-        conn = get_db()
-        c = conn.cursor()
-        
-        c.execute("SELECT user_id, amount FROM withdrawals WHERE id = ? AND status = 'pending'", (request_id,))
-        request = c.fetchone()
-        
-        if request:
-            user_id, amount = request
-            
-            c.execute("UPDATE withdrawals SET status = 'completed' WHERE id = ?", (request_id,))
-            c.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
-            
-            conn.commit()
-            
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=f"✅ Ваша заявка на вывод {amount} руб. подтверждена и обработана!"
-            )
-            
-            await update.message.reply_text(f"✅ Заявка {request_id} подтверждена")
-        else:
-            await update.message.reply_text("❌ Заявка не найдена или уже обработана")
-        
-        conn.close()
-        
-    except (IndexError, ValueError):
-        await update.message.reply_text("Использование: /confirm <ID заявки>")
+        await send_and_track(update, context, text, parse_mode='Markdown')
 
 # ========== ЗАПУСК ==========
 def main():
@@ -1086,11 +1293,8 @@ def main():
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin_requests))
-    application.add_handler(CommandHandler("confirm", admin_confirm))
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(CallbackQueryHandler(next_question_callback, pattern='^next_question$'))
-    application.add_handler(CallbackQueryHandler(admin_reply_callback, pattern='^admin_reply_'))
-    application.add_handler(CallbackQueryHandler(admin_close_callback, pattern='^admin_close_'))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     logger.info("Бот запускается...")
@@ -1098,6 +1302,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
