@@ -1407,34 +1407,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== АДМИН-КОМАНДЫ ==========
 async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await send_and_track(
-            update, context,
-            "❌ У вас нет прав администратора"
-        )
+        await update.message.reply_text("❌ У вас нет прав администратора")
         return
     
     tickets = get_open_tickets()
+    withdrawals = get_pending_withdrawals()
     
-    if not tickets:
-        await send_and_track(
-            update, context,
-            "📭 Нет активных обращений в поддержку"
+    if not tickets and not withdrawals:
+        await update.message.reply_text(
+            "📭 *Нет активных обращений*\n\n"
+            "• Нет тикетов в поддержку\n"
+            "• Нет заявок на вывод",
+            parse_mode='Markdown'
         )
-    else:
-        text = "🆘 *Активные обращения в поддержку:*\n\n"
+        return
+    
+    text = ""
+    
+    if tickets:
+        text += "🆘 *Активные обращения в поддержку:*\n\n"
         for ticket in tickets:
             text += f"🆔 *{ticket[0]}*\n"
             text += f"👤 {ticket[3]} (@{ticket[2]})\n"
             text += f"📝 {ticket[4][:100]}...\n"
             text += f"📅 {ticket[5]}\n"
             text += "─" * 20 + "\n"
-        
-        await send_and_track(update, context, text, parse_mode='Markdown')
-    
-    withdrawals = get_pending_withdrawals()
     
     if withdrawals:
-        text = "💰 *Ожидающие заявки на вывод:*\n\n"
+        if tickets:
+            text += "\n\n"
+        text += "💰 *Ожидающие заявки на вывод:*\n\n"
         for w in withdrawals:
             text += f"🆔 *{w[0]}*\n"
             text += f"👤 {w[2]} (@{w[3]})\n"
@@ -1443,8 +1445,9 @@ async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"📝 {w[6]}\n"
             text += f"📅 {w[7]}\n"
             text += "─" * 20 + "\n"
-        
-        await send_and_track(update, context, text, parse_mode='Markdown')
+    
+    # Отправляем напрямую, без send_and_track, чтобы не удалять сообщение с командой
+    await update.message.reply_text(text, parse_mode='Markdown')
 
 # ========== ТЕСТ GOOGLE SHEETS ==========
 async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1541,4 +1544,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
