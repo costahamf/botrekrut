@@ -325,7 +325,7 @@ def register_user(user_id, username, first_name, last_name):
     finally:
         conn.close()
 
-ddef update_test_status(user_id, passed):
+def update_test_status(user_id, passed):
     conn = get_db()
     c = conn.cursor()
     try:
@@ -1778,6 +1778,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
