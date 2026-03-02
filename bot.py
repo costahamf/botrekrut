@@ -276,20 +276,79 @@ def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, c
         return None, None
 
 def check_pending_couriers():
-    """Временно отключаем проверку Google Sheets"""
+    """Проверяет статусы курьеров в Google Sheets и обновляет БД"""
     try:
         sheet = get_google_sheet()
         if not sheet:
+            logger.warning("⚠️ Не удалось подключиться к Google Sheets для проверки статусов")
             return
         
         records = sheet.get_all_records()
-        logger.info(f"🔍 Найдено записей в таблице: {len(records)}")
+        logger.info(f"🔍 Проверяем {len(records)} записей в Google Sheets")
         
-        # Временно не делаем ничего с БД
-        logger.info("✅ Проверка Google Sheets выполнена (без обновления БД)")
+        conn = get_db()
+        c = conn.cursor()
+        
+        updated_count = 0
+        new_count = 0
+        
+        for i, record in enumerate(records):
+            try:
+                # Получаем данные из таблицы (подстраивай названия колонок под свои)
+                full_name = record.get('ФИО клиента') or record.get('ФИО курьера') or record.get('full_name') or ''
+                city = record.get('Семья') or record.get('Город') or record.get('city') or ''
+                status_text = record.get('СДАТЬ') or record.get('Статус') or record.get('status') or ''
+                sheet_row = i + 2  # +2 потому что 1 строка - заголовки
+                
+                # Пропускаем пустые строки
+                if not full_name or not city:
+                    continue
+                
+                # Определяем статус по эмодзи или тексту
+                status = 'pending'  # по умолчанию
+                if 'Подтвержден' in status_text or '✅' in status_text or '☑' in status_text:
+                    status = 'confirmed'
+                elif 'Отклонен' in status_text or '❌' in status_text:
+                    status = 'rejected'
+                
+                # Проверяем, есть ли уже такой курьер в БД
+                c.execute('''SELECT id, status FROM couriers 
+                             WHERE full_name = ? AND city = ? ORDER BY id DESC LIMIT 1''',
+                          (full_name, city))
+                existing = c.fetchone()
+                
+                if existing:
+                    # Обновляем статус если изменился
+                    if existing[1] != status:
+                        c.execute('''UPDATE couriers 
+                                     SET status = ?, confirmed_at = ? 
+                                     WHERE id = ?''',
+                                  (status, datetime.now().strftime("%Y-%m-%d %H:%M:%S") if status in ['confirmed', 'rejected'] else None, existing[0]))
+                        updated_count += 1
+                        logger.info(f"🔄 Обновлен статус курьера {full_name}: {existing[1]} -> {status}")
+                else:
+                    # Если курьера нет в БД, добавляем (например, если был добавлен вручную в таблицу)
+                    registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    c.execute('''INSERT INTO couriers 
+                                 (full_name, city, status, registered_at, sheet_row) 
+                                 VALUES (?, ?, ?, ?, ?)''',
+                              (full_name, city, status, registered_at, sheet_row))
+                    new_count += 1
+                    logger.info(f"✅ Добавлен новый курьер из таблицы: {full_name}")
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка при обработке строки {i+2}: {e}")
+                continue
+        
+        conn.commit()
+        
+        if updated_count > 0 or new_count > 0:
+            logger.info(f"📊 Результаты синхронизации: обновлено {updated_count}, добавлено {new_count}")
         
     except Exception as e:
         logger.error(f"❌ Ошибка проверки статусов: {e}")
+        import traceback
+        traceback.print_exc()
 def load_from_google_sheets():
     """Загружает курьеров из Google Sheets в БД при старте"""
     try:
@@ -1789,6 +1848,75 @@ async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += "──────────────────────\n"
     
     await update.message.reply_text(text)
+    async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ У вас нет прав администратора")
+        return
+    
+    tickets = get_open_tickets()
+    withdrawals = get_pending_withdrawals()
+    
+    if not tickets and not withdrawals:
+        await update.message.reply_text("📭 Нет активных обращений")
+        return
+    
+    text = ""
+    
+    if tickets:
+        text += "🆘 АКТИВНЫЕ ОБРАЩЕНИЯ В ПОДДЕРЖКУ:\n\n"
+        for ticket in tickets:
+            text += f"🆔 {ticket[0]}\n"
+            text += f"👤 {ticket[3]} (@{ticket[2]})\n"
+            text += f"📝 {ticket[4][:100]}...\n"
+            text += f"📅 {ticket[5]}\n"
+            text += "──────────────────────\n"
+    
+    if withdrawals:
+        if tickets:
+            text += "\n"
+        text += "💰 ОЖИДАЮЩИЕ ЗАЯВКИ НА ВЫВОД:\n\n"
+        for w in withdrawals:
+            text += f"🆔 {w[0]}\n"
+            text += f"👤 {w[2]} (@{w[3]})\n"
+            text += f"💰 {w[4]} руб.\n"
+            text += f"💳 {w[5]}\n"
+            text += f"📝 {w[6]}\n"
+            text += f"📅 {w[7]}\n"
+            text += "──────────────────────\n"
+    
+    await update.message.reply_text(text)
+
+# ========== СЮДА ВСТАВЛЯЕМ НОВУЮ ФУНКЦИЮ ==========
+async def admin_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Принудительная синхронизация статусов с Google Sheets (только для админа)"""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ У вас нет прав администратора")
+        return
+    
+    status_msg = await update.message.reply_text("🔄 Начинаю синхронизацию с Google Sheets...")
+    
+    try:
+        # Запускаем синхронизацию
+        check_pending_couriers()
+        
+        # Получаем статистику
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Считаем курьеров по статусам
+        c.execute("SELECT status, COUNT(*) FROM couriers GROUP BY status")
+        stats = c.fetchall()
+        
+        stats_text = "\n".join([f"• {s[0]}: {s[1]}" for s in stats]) if stats else "• нет данных"
+        
+        await status_msg.edit_text(
+            f"✅ *Синхронизация завершена!*\n\n"
+            f"📊 *Текущая статистика курьеров:*\n{stats_text}",
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Ошибка синхронизации: {str(e)}")
 
 # ========== ТЕСТ GOOGLE SHEETS ==========
 async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1870,7 +1998,7 @@ def main():
     start_sheet_monitoring()  # Запускаем мониторинг Google Sheets
     
     application = Application.builder().token(TOKEN).build()
-    
+    application.add_handler(CommandHandler("sync", admin_sync))
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin_requests))
     application.add_handler(CommandHandler("testgoogle", test_google))
@@ -1883,6 +2011,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
