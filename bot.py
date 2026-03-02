@@ -333,9 +333,17 @@ def update_test_status(user_id, passed):
                   (1 if passed else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
         conn.commit()
         
+        # Проверяем, что обновилось
         c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
         new_value = c.fetchone()
         logger.info(f"   ✅ После обновления test_passed={new_value[0] if new_value else None}")
+        
+        # ДОБАВЬ ЭТУ ПРОВЕРКУ:
+        if passed and new_value and new_value[0] == 1:
+            logger.info(f"   🎉 ПОЛЬЗОВАТЕЛЬ {user_id} УСПЕШНО СДАЛ ТЕСТ!")
+        elif not passed and new_value and new_value[0] == 0:
+            logger.info(f"   📝 ПОЛЬЗОВАТЕЛЬ {user_id} НЕ СДАЛ ТЕСТ")
+            
     except Exception as e:
         logger.error(f"Ошибка в update_test_status: {e}")
     finally:
@@ -1652,6 +1660,7 @@ async def back_to_main(query, user_id, context):
             c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
             result = c.fetchone()
             test_passed = result[0] if result else 0
+            logger.info(f"📊 back_to_main: user_id={user_id}, test_passed={test_passed}")  # Добавь это
     except Exception as e:
         logger.error(f"Ошибка при проверке test_passed в back_to_main: {e}")
     finally:
@@ -1838,6 +1847,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
