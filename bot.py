@@ -401,8 +401,7 @@ def update_test_status(user_id, passed):
                 INSERT INTO users 
                 (user_id, username, first_name, last_name, registration_date, balance, test_passed) 
                 VALUES (?, ?, ?, ?, ?, 0, ?)
-            """, (user_id, f"user_{user_id}", "Пользователь", "", registration_date, 1 if passed else 0))
-            conn.commit()
+            """, (user_id, username or f"user_{user_id}", first_name or "Пользователь", last_name or "", registration_date, 1 if passed else 0))
             logger.info(f"✅ Пользователь {user_id} создан принудительно")
         
         # Обновляем статус
@@ -728,11 +727,11 @@ def confirm_withdrawal(request_id):
     finally:
         conn.close()
 # ========== ФУНКЦИИ ДЛЯ КУРЬЕРОВ ==========
-def add_courier(recruiter_id, full_name, city):
+def add_courier(recruiter_id, recruiter_username, recruiter_name, full_name, city):
     conn = get_db()
     c = conn.cursor()
     try:
-        logger.info(f"📝 ПОПЫТКА ДОБАВИТЬ КУРЬЕРА: {full_name}, {city} от рекрутера {recruiter_id}")
+        logger.info(f"📝 ПОПЫТКА ДОБАВИТЬ КУРЬЕРА: {full_name}, {city} от рекрутера {recruiter_id} (@{recruiter_username})")
         
         # Проверяем, есть ли вообще пользователь с таким ID
         c.execute("SELECT * FROM users WHERE user_id = ?", (recruiter_id,))
@@ -740,7 +739,15 @@ def add_courier(recruiter_id, full_name, city):
         if user:
             logger.info(f"   ✅ Рекрутер найден: {user[2]} (@{user[1]})")
         else:
-            logger.error(f"   ❌ Рекрутер с ID {recruiter_id} НЕ НАЙДЕН!")
+            logger.warning(f"   ⚠️ Рекрутер с ID {recruiter_id} не найден в БД, создаем...")
+            registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            c.execute("""
+                INSERT INTO users 
+                (user_id, username, first_name, last_name, registration_date, balance, test_passed) 
+                VALUES (?, ?, ?, ?, ?, 0, 0)
+            """, (recruiter_id, recruiter_username, recruiter_name, "", registration_date))
+            conn.commit()
+            logger.info(f"✅ Пользователь {recruiter_id} создан с username @{recruiter_username}")
         
         # Проверяем, нет ли уже такого курьера у этого рекрутера
         c.execute('''SELECT id FROM couriers 
@@ -761,28 +768,17 @@ def add_courier(recruiter_id, full_name, city):
                      VALUES (?, ?, ?, ?, ?)''',
                   (recruiter_id, full_name, city, 'pending', registered_at))
         
-        # Проверяем, сколько строк затронуто
-        logger.info(f"   ✅ INSERT выполнен, rows affected: {conn.total_changes}")
         conn.commit()
         
-        # Проверяем, что запись действительно добавилась
-        c.execute("SELECT * FROM couriers WHERE recruiter_id = ? ORDER BY id DESC LIMIT 1", (recruiter_id,))
-        last = c.fetchone()
-        if last:
-            logger.info(f"   ✅ Запись найдена в БД: id={last[0]}, {last[2]}, {last[3]}, статус {last[4]}")
-        else:
-            logger.error(f"   ❌ ЗАПИСЬ НЕ НАЙДЕНА В БД ПОСЛЕ INSERT!")
-            return False, "Ошибка при сохранении в БД"
-        
-        # Получаем данные рекрутера для Google Sheets
+        # Получаем актуальные данные для Google Sheets
         c.execute("SELECT first_name, username FROM users WHERE user_id = ?", (recruiter_id,))
         recruiter = c.fetchone()
-        recruiter_name = recruiter[0] if recruiter else "Неизвестно"
-        recruiter_username = recruiter[1] if recruiter else ""
+        final_recruiter_name = recruiter[0] if recruiter and recruiter[0] else recruiter_name
+        final_recruiter_username = recruiter[1] if recruiter and recruiter[1] else recruiter_username
         
-        # Отправляем в Google Sheets с кнопками
+        # Отправляем в Google Sheets
         success, row_number = add_courier_to_google_sheet(
-            recruiter_name, recruiter_username, full_name, city
+            final_recruiter_name, final_recruiter_username, full_name, city
         )
         
         if success and row_number:
@@ -792,14 +788,6 @@ def add_courier(recruiter_id, full_name, city):
                       (row_number, recruiter_id, full_name, city))
             conn.commit()
             logger.info(f"✅ Курьер {full_name} добавлен, строка в таблице: {row_number}")
-            
-            # Проверяем, что запись действительно добавилась
-            c.execute("SELECT * FROM couriers WHERE recruiter_id = ? ORDER BY id DESC LIMIT 1", (recruiter_id,))
-            last = c.fetchone()
-            if last:
-                logger.info(f"   ✅ Проверка: последний добавленный в БД - {last[2]}, {last[3]}, статус {last[4]}")
-            else:
-                logger.info(f"   ❌ Странно, запись не найдена в БД")
         
         return True, "Заявка на курьера отправлена на проверку! ✅"
     except Exception as e:
@@ -807,6 +795,7 @@ def add_courier(recruiter_id, full_name, city):
         import traceback
         traceback.print_exc()
         return False, f"Ошибка: {str(e)}"
+    # НЕТ finally с conn.close()!
 # ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await delete_previous_message(update, context)
@@ -1317,6 +1306,8 @@ async def add_courier_start(query, user_id, context):
 
 async def handle_courier_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    username = update.effective_user.username or f"user_{user_id}"
+    first_name = update.effective_user.first_name or "Пользователь"
     text = update.message.text.strip()
     
     try:
@@ -1339,7 +1330,7 @@ async def handle_courier_input(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return
         
-        success, message = add_courier(user_id, full_name, city)
+        success, message = add_courier(user_id, username, first_name, full_name, city)
         
         if success:
             await send_and_track(
@@ -1375,7 +1366,6 @@ async def handle_courier_input(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
-
 # ========== ТЕСТИРОВАНИЕ ==========
 async def start_test(query, user_id, context):
     can_take, minutes_left = can_take_test(user_id)
@@ -1893,6 +1883,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
