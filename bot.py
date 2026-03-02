@@ -1959,6 +1959,81 @@ async def admin_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка синхронизации: {str(e)}")
+async def admin_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Принудительная синхронизация статусов с Google Sheets (только для админа)"""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ У вас нет прав администратора")
+        return
+    
+    status_msg = await update.message.reply_text("🔄 Начинаю синхронизацию с Google Sheets...")
+    
+    try:
+        # Запускаем синхронизацию
+        check_pending_couriers()
+        
+        # Получаем статистику
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Считаем курьеров по статусам
+        c.execute("SELECT status, COUNT(*) FROM couriers GROUP BY status")
+        stats = c.fetchall()
+        
+        stats_text = "\n".join([f"• {s[0]}: {s[1]}" for s in stats]) if stats else "• нет данных"
+        
+        await status_msg.edit_text(
+            f"✅ *Синхронизация завершена!*\n\n"
+            f"📊 *Текущая статистика курьеров:*\n{stats_text}",
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Ошибка синхронизации: {str(e)}")
+
+# ========== СЮДА ВСТАВЛЯЕМ НОВУЮ ФУНКЦИЮ ==========
+async def admin_check_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка файла БД"""
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    try:
+        # Проверяем существование файла
+        if os.path.exists('bot_database.db'):
+            size = os.path.getsize('bot_database.db')
+            text = f"✅ Файл БД существует\n📦 Размер: {size} байт\n📍 Путь: {os.path.abspath('bot_database.db')}\n\n"
+            
+            # Показываем статистику
+            conn = get_db()
+            c = conn.cursor()
+            
+            # Сколько курьеров
+            c.execute("SELECT COUNT(*) FROM couriers")
+            couriers_count = c.fetchone()[0]
+            text += f"👥 Курьеров в БД: {couriers_count}\n"
+            
+            # Сколько пользователей
+            c.execute("SELECT COUNT(*) FROM users")
+            users_count = c.fetchone()[0]
+            text += f"👤 Пользователей в БД: {users_count}\n"
+            
+            # Показываем первых 5 курьеров
+            if couriers_count > 0:
+                c.execute("SELECT full_name, city, status FROM couriers LIMIT 5")
+                couriers = c.fetchall()
+                text += "\n📋 Первые 5 курьеров:\n"
+                for i, (name, city, status) in enumerate(couriers, 1):
+                    emoji = "✅" if status == 'confirmed' else "⏳" if status == 'pending' else "❌"
+                    text += f"{i}. {emoji} {name} - {city}\n"
+            else:
+                text += "\n❌ В БД нет курьеров!"
+            
+        else:
+            text = f"❌ Файл БД НЕ существует!\n📍 Путь: {os.path.abspath('bot_database.db')}"
+        
+        await update.message.reply_text(text)
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
 
 # ========== ТЕСТ GOOGLE SHEETS ==========
 async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2035,12 +2110,13 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== ЗАПУСК ==========
 def main():
-    start_auto_backup()  # Запускаем автосохранение
+    start_auto_backup()
     init_database()
-    start_sheet_monitoring()  # Запускаем мониторинг Google Sheets
+    start_sheet_monitoring()
     
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("sync", admin_sync))
+    application.add_handler(CommandHandler("checkdb", admin_check_db))  # ← добавить эту строку
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin_requests))
     application.add_handler(CommandHandler("testgoogle", test_google))
@@ -2053,6 +2129,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
