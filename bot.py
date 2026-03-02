@@ -281,7 +281,7 @@ def start_sheet_monitoring():
     thread.start()
     logger.info("✅ Мониторинг Google Sheets запущен (интервал 5 минут)")
 
-# ========== ФУНКЦИИ ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕЙ ==========
+
 # ========== ФУНКЦИИ ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕЙ ==========
 def is_registered(user_id):
     conn = None
@@ -300,7 +300,7 @@ def is_registered(user_id):
                 conn.close()
             except:
                 pass
-
+                
 def register_user(user_id, username, first_name, last_name):
     conn = None
     try:
@@ -313,7 +313,6 @@ def register_user(user_id, username, first_name, last_name):
         logger.info(f"✅ Пользователь {user_id} зарегистрирован")
     except Exception as e:
         logger.error(f"Ошибка в register_user: {e}")
-        # Не вызываем rollback если conn уже закрыт
     finally:
         if conn:
             try:
@@ -334,7 +333,6 @@ def update_test_status(user_id, passed):
                   (1 if passed else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
         conn.commit()
         
-        # Проверяем, обновилось ли
         c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
         new_value = c.fetchone()
         logger.info(f"   ✅ После обновления test_passed={new_value[0] if new_value else None}")
@@ -342,7 +340,10 @@ def update_test_status(user_id, passed):
         logger.error(f"Ошибка в update_test_status: {e}")
     finally:
         if conn:
-            conn.close()
+            try:
+                conn.close()
+            except:
+                pass
 
 def can_take_test(user_id):
     conn = None
@@ -377,7 +378,10 @@ def can_take_test(user_id):
         return True, 0
     finally:
         if conn:
-            conn.close()
+            try:
+                conn.close()
+            except:
+                pass
 # ========== ТЕСТОВЫЕ ВОПРОСЫ ==========
 TEST_QUESTIONS = [
     {
@@ -601,7 +605,10 @@ def get_user_balance(user_id):
         return 0
     finally:
         if conn:
-            conn.close()
+            try:
+                conn.close()
+            except:
+                pass
 
 def create_withdrawal_request(user_id, amount, method, details):
     conn = get_db()
@@ -816,7 +823,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Проверка доступа для обычных пользователей
-    conn = None  # ← это твоя строка 871?
     try:
         conn = get_db()
         c = conn.cursor()
@@ -1190,7 +1196,10 @@ def get_recruiter_couriers(recruiter_id):
         return []
     finally:
         if conn:
-            conn.close()
+            try:
+                conn.close()
+            except:
+                pass
 async def show_my_couriers(query, user_id, context):
     couriers = get_recruiter_couriers(user_id)
     total_balance = get_user_balance(user_id)
@@ -1826,6 +1835,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
