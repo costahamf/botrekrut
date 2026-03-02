@@ -370,9 +370,10 @@ def start_sheet_monitoring():
 # ========== ФУНКЦИИ ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕЙ ==========
 # ========== ФУНКЦИИ ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕЙ ==========
 def is_registered(user_id):
-    conn = get_db()
-    c = conn.cursor()
+    conn = None
     try:
+        conn = get_db()
+        c = conn.cursor()
         c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
         result = c.fetchone()
         return result is not None
@@ -380,21 +381,26 @@ def is_registered(user_id):
         logger.error(f"Ошибка в is_registered: {e}")
         return False
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def register_user(user_id, username, first_name, last_name):
-    conn = get_db()
-    c = conn.cursor()
+    conn = None
     try:
+        conn = get_db()
+        c = conn.cursor()
         registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         c.execute("INSERT OR IGNORE INTO users (user_id, username, first_name, last_name, registration_date, balance) VALUES (?, ?, ?, ?, ?, 0)",
                   (user_id, username, first_name, last_name, registration_date))
         conn.commit()
+        logger.info(f"✅ Пользователь {user_id} зарегистрирован")
     except Exception as e:
         logger.error(f"Ошибка в register_user: {e}")
+        if conn:
+            conn.rollback()
     finally:
-        conn.close()
-
+        if conn:
+            conn.close()
 def update_test_status(user_id, passed):
     conn = get_db()
     c = conn.cursor()
@@ -1861,6 +1867,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
