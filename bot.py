@@ -294,22 +294,37 @@ def check_pending_couriers():
         
         for i, record in enumerate(records):
             try:
-                # Получаем данные из таблицы (подстраивай названия колонок под свои)
-                full_name = record.get('ФИО клиента') or record.get('ФИО курьера') or record.get('full_name') or ''
-                city = record.get('Семья') or record.get('Город') or record.get('city') or ''
-                status_text = record.get('СДАТЬ') or record.get('Статус') or record.get('status') or ''
-                sheet_row = i + 2  # +2 потому что 1 строка - заголовки
+                # Получаем данные из таблицы по ТВОИМ колонкам
+                full_name = record.get('ФИО клиента') or ''
+                city = record.get('Город') or ''
+                status_text = record.get('СТАТУС') or ''
+                accepted = record.get('ПРИНЯТО') or '0'
+                rejected = record.get('ОТКЛОНЕНО') or '0'
+                
+                sheet_row = i + 2  # номер строки в таблице
                 
                 # Пропускаем пустые строки
                 if not full_name or not city:
                     continue
                 
-                # Определяем статус по эмодзи или тексту
-                status = 'pending'  # по умолчанию
-                if 'Подтвержден' in status_text or '✅' in status_text or '☑' in status_text:
+                # ОПРЕДЕЛЯЕМ СТАТУС (приоритет: ПРИНЯТО -> ОТКЛОНЕНО -> СТАТУС)
+                status = 'pending'
+                
+                # 1. Сначала проверяем ПРИНЯТО (самое главное!)
+                if str(accepted).strip() == '1':
                     status = 'confirmed'
-                elif 'Отклонен' in status_text or '❌' in status_text:
+                    logger.info(f"✅ Курьер {full_name} ПОДТВЕРЖДЕН (ПРИНЯТО=1)")
+                
+                # 2. Если не принято, проверяем ОТКЛОНЕНО
+                elif str(rejected).strip() == '1':
                     status = 'rejected'
+                    logger.info(f"❌ Курьер {full_name} ОТКЛОНЕН (ОТКЛОНЕНО=1)")
+                
+                # 3. Если нет 1 в принято/отклонено, смотрим СТАТУС
+                elif 'Подтвержден' in status_text or '✅' in status_text or '☑' in status_text:
+                    status = 'confirmed'
+                elif 'Ожидает' in status_text or '⏳' in status_text:
+                    status = 'pending'
                 
                 # Проверяем, есть ли уже такой курьер в БД
                 c.execute('''SELECT id, status FROM couriers 
@@ -323,11 +338,11 @@ def check_pending_couriers():
                         c.execute('''UPDATE couriers 
                                      SET status = ?, confirmed_at = ? 
                                      WHERE id = ?''',
-                                  (status, datetime.now().strftime("%Y-%m-%d %H:%M:%S") if status in ['confirmed', 'rejected'] else None, existing[0]))
+                                  (status, datetime.now().strftime("%Y-%m-%d %H:%M:%S") if status == 'confirmed' else None, existing[0]))
                         updated_count += 1
                         logger.info(f"🔄 Обновлен статус курьера {full_name}: {existing[1]} -> {status}")
                 else:
-                    # Если курьера нет в БД, добавляем (например, если был добавлен вручную в таблицу)
+                    # Если курьера нет в БД, добавляем
                     registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     c.execute('''INSERT INTO couriers 
                                  (full_name, city, status, registered_at, sheet_row) 
@@ -364,22 +379,31 @@ def load_from_google_sheets():
         c = conn.cursor()
         
         for i, record in enumerate(records):
-            # Проверяем структуру твоей таблицы и подстраиваемся
-            # Обычно колонки: Дата, Имя рекрутера, Username, ФИО курьера, Город, Статус, Баланс, Принят, Отклонен
             try:
-                full_name = record.get('ФИО курьера') or record.get('full_name') or record.get('Имя') or ''
-                city = record.get('Город') or record.get('city') or ''
-                status = record.get('Статус') or record.get('status') or '⏳ Ожидает'
+                full_name = record.get('ФИО клиента') or ''
+                city = record.get('Город') or ''
+                status_text = record.get('СТАТУС') or ''
+                accepted = record.get('ПРИНЯТО') or '0'
+                rejected = record.get('ОТКЛОНЕНО') or '0'
                 
                 if not full_name or not city:
                     continue
+                
+                # Определяем статус
+                status = 'pending'
+                if str(accepted).strip() == '1':
+                    status = 'confirmed'
+                elif str(rejected).strip() == '1':
+                    status = 'rejected'
+                elif 'Подтвержден' in status_text or '✅' in status_text:
+                    status = 'confirmed'
                 
                 # Вставляем или обновляем запись
                 c.execute('''
                     INSERT OR REPLACE INTO couriers 
                     (full_name, city, status, registered_at, sheet_row) 
                     VALUES (?, ?, ?, ?, ?)
-                ''', (full_name, city, status, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), i + 2))  # +2 потому что 1 строка - заголовки
+                ''', (full_name, city, status, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), i + 2))
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка при обработке строки {i+2}: {e}")
@@ -1972,6 +1996,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
