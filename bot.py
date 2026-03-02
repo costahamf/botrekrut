@@ -305,6 +305,7 @@ def check_pending_couriers():
         
         updated_count = 0          # сколько обновлено в БД
         new_count = 0               # сколько добавлено в БД
+        balance_updated_count = 0   # сколько обновлено балансов
         sheet_updated_count = 0     # сколько обновлено в таблице
         
         for i, record in enumerate(records):
@@ -314,7 +315,10 @@ def check_pending_couriers():
                 city = record.get('Город', '').strip()
                 status_text = record.get('СТАТУС', '').strip()
                 
-                # ПРИНЯТО и ОТКЛОНЕНО могут быть числами или строками
+                # ПОЛУЧАЕМ БАЛАНС (может быть в колонке Время или Баланс)
+                balance_raw = record.get('Время', '0') or record.get('Баланс', '0')
+                
+                # ПРИНЯТО и ОТКЛОНЕНО
                 accepted_raw = record.get('ПРИНЯТО', '0')
                 rejected_raw = record.get('ОТКЛОНЕНО', '0')
                 
@@ -322,30 +326,32 @@ def check_pending_couriers():
                 accepted = str(accepted_raw).strip()
                 rejected = str(rejected_raw).strip()
                 
-                sheet_row = i + 2  # номер строки в таблице (+2 потому что 1 строка - заголовки)
+                # Преобразуем баланс в число
+                try:
+                    balance = float(str(balance_raw).replace(',', '.').replace(' ', ''))
+                except:
+                    balance = 0.0
+                
+                sheet_row = i + 2  # номер строки в таблице
                 
                 # Пропускаем пустые строки
                 if not full_name or not city:
                     continue
                 
                 # ========== ОПРЕДЕЛЯЕМ СТАТУС ==========
-                # Приоритет: ПРИНЯТО -> ОТКЛОНЕНО -> СТАТУС
                 new_status = None
                 new_status_text = None
                 
-                # 1. Проверяем ПРИНЯТО
                 if accepted in ['1', 'true', 'True', 'TRUE', 'yes', 'Yes', 'YES', '✅', '☑']:
                     new_status = 'confirmed'
                     new_status_text = "✅ Подтвержден"
                     logger.info(f"✅ Курьер {full_name} ПОДТВЕРЖДЕН (ПРИНЯТО={accepted_raw})")
                 
-                # 2. Проверяем ОТКЛОНЕНО
                 elif rejected in ['1', 'true', 'True', 'TRUE', 'yes', 'Yes', 'YES', '❌']:
                     new_status = 'rejected'
                     new_status_text = "❌ Отклонен"
                     logger.info(f"❌ Курьер {full_name} ОТКЛОНЕН (ОТКЛОНЕНО={rejected_raw})")
                 
-                # 3. Если нет 1 в ПРИНЯТО/ОТКЛОНЕНО, смотрим СТАТУС
                 else:
                     if 'Подтвержден' in status_text or '✅' in status_text or '☑' in status_text:
                         new_status = 'confirmed'
@@ -356,16 +362,16 @@ def check_pending_couriers():
                         new_status_text = "⏳ Ожидает"
                 
                 # ========== ПРОВЕРЯЕМ, ЕСТЬ ЛИ КУРЬЕР В БД ==========
-                c.execute('''SELECT id, status, sheet_row FROM couriers 
+                c.execute('''SELECT id, status, sheet_row, balance, recruiter_id FROM couriers 
                              WHERE full_name = ? AND city = ? ORDER BY id DESC LIMIT 1''',
                           (full_name, city))
                 existing = c.fetchone()
                 
                 if existing:
                     # КУРЬЕР УЖЕ ЕСТЬ В БД
-                    existing_id, existing_status, existing_sheet_row = existing
+                    existing_id, existing_status, existing_sheet_row, existing_balance, recruiter_id = existing
                     
-                    # Проверяем, нужно ли обновить статус в БД
+                    # ===== ОБНОВЛЕНИЕ СТАТУСА =====
                     if existing_status != new_status:
                         c.execute('''UPDATE couriers 
                                      SET status = ?, confirmed_at = ? 
@@ -376,27 +382,40 @@ def check_pending_couriers():
                         updated_count += 1
                         logger.info(f"🔄 Обновлен статус в БД: {full_name}: {existing_status} -> {new_status}")
                         
-                        # Если у нас есть новый статус для таблицы и знаем номер строки
                         if new_status_text and existing_sheet_row:
                             update_courier_status_in_sheet(existing_sheet_row, new_status_text)
                             sheet_updated_count += 1
                     
-                    # Проверяем, нужно ли обновить номер строки в БД (если он изменился)
+                    # ===== ОБНОВЛЕНИЕ БАЛАНСА КУРЬЕРА =====
+                    if existing_balance != balance:
+                        c.execute("UPDATE couriers SET balance = ? WHERE id = ?", (balance, existing_id))
+                        balance_updated_count += 1
+                        logger.info(f"💰 Обновлен баланс курьера {full_name}: {existing_balance} -> {balance}")
+                        
+                        # ========== ОБНОВЛЯЕМ ОБЩИЙ БАЛАНС РЕКРУТЕРА ==========
+                        if recruiter_id:
+                            c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (recruiter_id,))
+                            total_balance = c.fetchone()[0] or 0
+                            
+                            c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (total_balance, recruiter_id))
+                            logger.info(f"👤 Обновлен общий баланс рекрутера {recruiter_id}: {total_balance}")
+                        # =====================================================
+                    
+                    # Проверяем, нужно ли обновить номер строки в БД
                     if existing_sheet_row != sheet_row:
                         c.execute("UPDATE couriers SET sheet_row = ? WHERE id = ?", (sheet_row, existing_id))
                         logger.info(f"📝 Обновлен номер строки для {full_name}: {existing_sheet_row} -> {sheet_row}")
                 
                 else:
-                    # КУРЬЕРА НЕТ В БД - ДОБАВЛЯЕМ
+                    # НОВЫЙ КУРЬЕР (не можем обновить баланс рекрутера, т.к. не знаем recruiter_id)
                     registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     c.execute('''INSERT INTO couriers 
-                                 (full_name, city, status, registered_at, sheet_row) 
-                                 VALUES (?, ?, ?, ?, ?)''',
-                              (full_name, city, new_status, registered_at, sheet_row))
+                                 (full_name, city, status, balance, registered_at, sheet_row) 
+                                 VALUES (?, ?, ?, ?, ?, ?)''',
+                              (full_name, city, new_status, balance, registered_at, sheet_row))
                     new_count += 1
-                    logger.info(f"✅ Добавлен новый курьер в БД: {full_name} (статус: {new_status})")
+                    logger.info(f"✅ Добавлен новый курьер в БД: {full_name} (статус: {new_status}, баланс: {balance})")
                     
-                    # Если у нас есть статус для таблицы, обновляем её
                     if new_status_text:
                         update_courier_status_in_sheet(sheet_row, new_status_text)
                         sheet_updated_count += 1
@@ -409,10 +428,11 @@ def check_pending_couriers():
         conn.commit()
         
         # ========== ЛОГИРУЕМ РЕЗУЛЬТАТЫ ==========
-        if updated_count > 0 or new_count > 0 or sheet_updated_count > 0:
+        if updated_count > 0 or new_count > 0 or balance_updated_count > 0 or sheet_updated_count > 0:
             logger.info(f"📊 ИТОГИ СИНХРОНИЗАЦИИ:")
-            logger.info(f"   • Обновлено в БД: {updated_count}")
-            logger.info(f"   • Добавлено в БД: {new_count}")
+            logger.info(f"   • Обновлено статусов в БД: {updated_count}")
+            logger.info(f"   • Обновлено балансов в БД: {balance_updated_count}")
+            logger.info(f"   • Добавлено новых курьеров: {new_count}")
             logger.info(f"   • Обновлено в таблице: {sheet_updated_count}")
         else:
             logger.info("📊 Синхронизация завершена - изменений нет")
@@ -856,11 +876,39 @@ def get_pending_withdrawals():
         return []
 
 def confirm_withdrawal(request_id):
-    conn = get_db()
-    c = conn.cursor()
+    """Подтверждает вывод средств и списывает баланс"""
     try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Получаем информацию о заявке
+        c.execute('''SELECT user_id, amount FROM withdrawals WHERE id = ?''', (request_id,))
+        withdrawal = c.fetchone()
+        
+        if not withdrawal:
+            logger.error(f"❌ Заявка {request_id} не найдена")
+            return
+        
+        user_id, amount = withdrawal
+        
+        # Проверяем текущий баланс
+        c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+        current_balance = c.fetchone()[0]
+        
+        if current_balance < amount:
+            logger.error(f"❌ Недостаточно средств: баланс {current_balance}, запрос {amount}")
+            return
+        
+        # Обновляем баланс пользователя
+        new_balance = current_balance - amount
+        c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, user_id))
+        
+        # Обновляем статус заявки
         c.execute("UPDATE withdrawals SET status = 'completed' WHERE id = ?", (request_id,))
+        
         conn.commit()
+        logger.info(f"✅ Подтвержден вывод {amount} для пользователя {user_id}. Новый баланс: {new_balance}")
+        
     except Exception as e:
         logger.error(f"Ошибка в confirm_withdrawal: {e}")
 # ========== ФУНКЦИИ ДЛЯ КУРЬЕРОВ ==========
@@ -906,6 +954,13 @@ def add_courier(recruiter_id, recruiter_username, recruiter_name, full_name, cit
                   (recruiter_id, full_name, city, 'pending', registered_at))
         
         conn.commit()
+        
+        # ========== ОБНОВЛЯЕМ ОБЩИЙ БАЛАНС РЕКРУТЕРА ==========
+        c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (recruiter_id,))
+        total_balance = c.fetchone()[0] or 0
+        c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (total_balance, recruiter_id))
+        logger.info(f"👤 Обновлен общий баланс рекрутера {recruiter_id}: {total_balance}")
+        # =====================================================
         
         # Получаем актуальные данные для Google Sheets
         c.execute("SELECT first_name, username FROM users WHERE user_id = ?", (recruiter_id,))
@@ -2099,6 +2154,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
