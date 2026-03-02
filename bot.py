@@ -44,18 +44,18 @@ DB_CONN = None
 BACKUP_FILE = 'backup.json'
 
 def get_db():
-    """Возвращает соединение с БД в памяти"""
+    """Возвращает соединение с БД"""
     global DB_CONN
     try:
         if DB_CONN is None:
-            DB_CONN = sqlite3.connect(':memory:', check_same_thread=False)
+            # Вместо :memory: используем файл
+            DB_CONN = sqlite3.connect('bot_database.db', check_same_thread=False)
             init_database_tables(DB_CONN)
-            load_backup()
-        # Просто возвращаем соединение, не проверяем его
+            load_backup()  # загружаем бэкап если есть
         return DB_CONN
     except Exception as e:
         logger.error(f"❌ Ошибка в get_db: {e}")
-        DB_CONN = sqlite3.connect(':memory:', check_same_thread=False)
+        DB_CONN = sqlite3.connect('bot_database.db', check_same_thread=False)
         init_database_tables(DB_CONN)
         load_backup()
         return DB_CONN
@@ -209,7 +209,8 @@ def start_auto_backup():
 atexit.register(backup_database)
 def init_database():
     """Инициализирует БД"""
-    get_db()  # Просто вызываем для создания таблиц
+    get_db()  # Создаем таблицы
+    load_from_google_sheets()  # Загружаем курьеров из Google Sheets
     logger.info("✅ База данных инициализирована")
     
 # ========== GOOGLE SHEETS ИНТЕГРАЦИЯ ==========
@@ -289,7 +290,49 @@ def check_pending_couriers():
         
     except Exception as e:
         logger.error(f"❌ Ошибка проверки статусов: {e}")
-
+def load_from_google_sheets():
+    """Загружает курьеров из Google Sheets в БД при старте"""
+    try:
+        sheet = get_google_sheet()
+        if not sheet:
+            logger.warning("⚠️ Не удалось подключиться к Google Sheets для загрузки")
+            return
+        
+        records = sheet.get_all_records()
+        logger.info(f"📥 Загружаем {len(records)} курьеров из Google Sheets")
+        
+        conn = get_db()
+        c = conn.cursor()
+        
+        for i, record in enumerate(records):
+            # Проверяем структуру твоей таблицы и подстраиваемся
+            # Обычно колонки: Дата, Имя рекрутера, Username, ФИО курьера, Город, Статус, Баланс, Принят, Отклонен
+            try:
+                full_name = record.get('ФИО курьера') or record.get('full_name') or record.get('Имя') or ''
+                city = record.get('Город') or record.get('city') or ''
+                status = record.get('Статус') or record.get('status') or '⏳ Ожидает'
+                
+                if not full_name or not city:
+                    continue
+                
+                # Вставляем или обновляем запись
+                c.execute('''
+                    INSERT OR REPLACE INTO couriers 
+                    (full_name, city, status, registered_at, sheet_row) 
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (full_name, city, status, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), i + 2))  # +2 потому что 1 строка - заголовки
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка при обработке строки {i+2}: {e}")
+                continue
+        
+        conn.commit()
+        logger.info(f"✅ Загружено {len(records)} курьеров из Google Sheets")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки из Google Sheets: {e}")
+        import traceback
+        traceback.print_exc()
 def start_sheet_monitoring():
     """Запускает мониторинг Google Sheets в фоне"""
     def monitor_worker():
@@ -1850,6 +1893,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
