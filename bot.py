@@ -429,9 +429,14 @@ def register_user(user_id, username, first_name, last_name):
             except:
                 pass
 def update_test_status(user_id, passed):
-    conn = get_db()
-    c = conn.cursor()
+    conn = None
     try:
+        conn = get_db()
+        if conn is None:
+            logger.error("❌ Не удалось получить соединение с БД в update_test_status")
+            return
+            
+        c = conn.cursor()
         logger.info(f"📝 Обновление test_passed для user_id={user_id} на {1 if passed else 0}")
         c.execute("UPDATE users SET test_passed = ?, last_test_attempt = ? WHERE user_id = ?",
                   (1 if passed else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
@@ -444,7 +449,8 @@ def update_test_status(user_id, passed):
     except Exception as e:
         logger.error(f"Ошибка в update_test_status: {e}")
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def can_take_test(user_id):
     conn = None
@@ -1274,9 +1280,14 @@ async def personal_account_menu(query, user_id, context):
     )
 def get_recruiter_couriers(recruiter_id):
     """Получает всех курьеров рекрутера"""
-    conn = get_db()
-    c = conn.cursor()
+    conn = None
     try:
+        conn = get_db()
+        if conn is None:
+            logger.error("❌ Не удалось получить соединение с БД в get_recruiter_couriers")
+            return []
+            
+        c = conn.cursor()
         c.execute('''SELECT full_name, city, status, registered_at, confirmed_at 
                      FROM couriers 
                      WHERE recruiter_id = ? 
@@ -1286,7 +1297,8 @@ def get_recruiter_couriers(recruiter_id):
         logger.error(f"Ошибка в get_recruiter_couriers: {e}")
         return []
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 async def show_my_couriers(query, user_id, context):
     couriers = get_recruiter_couriers(user_id)
     total_balance = get_user_balance(user_id)
@@ -1922,6 +1934,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
