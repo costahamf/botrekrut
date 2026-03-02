@@ -764,8 +764,6 @@ def add_courier(recruiter_id, full_name, city):
         import traceback
         traceback.print_exc()
         return False, f"Ошибка: {str(e)}"
-    finally:
-        conn.close()
 # ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await delete_previous_message(update, context)
@@ -1852,6 +1850,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
