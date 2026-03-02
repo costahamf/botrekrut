@@ -913,11 +913,20 @@ def confirm_withdrawal(request_id):
         logger.error(f"Ошибка в confirm_withdrawal: {e}")
 # ========== ФУНКЦИИ ДЛЯ КУРЬЕРОВ ==========
 def add_courier(recruiter_id, recruiter_username, recruiter_name, full_name, city):
+    # ========== ПРИНУДИТЕЛЬНОЕ ЛОГИРОВАНИЕ ==========
+    logger.info("="*50)
+    logger.info("🔥🔥🔥 ADD_COURIER ВЫЗВАНА!")
+    logger.info(f"  recruiter_id: {recruiter_id} (тип: {type(recruiter_id)})")
+    logger.info(f"  recruiter_username: {recruiter_username}")
+    logger.info(f"  recruiter_name: {recruiter_name}")
+    logger.info(f"  full_name: {full_name}")
+    logger.info(f"  city: {city}")
+    logger.info("="*50)
+    # ================================================
+    
     conn = get_db()
     c = conn.cursor()
     try:
-        logger.info(f"📝 ПОПЫТКА ДОБАВИТЬ КУРЬЕРА: {full_name}, {city} от рекрутера {recruiter_id} (@{recruiter_username})")
-        
         # Проверяем, есть ли вообще пользователь с таким ID
         c.execute("SELECT * FROM users WHERE user_id = ?", (recruiter_id,))
         user = c.fetchone()
@@ -944,16 +953,33 @@ def add_courier(recruiter_id, recruiter_username, recruiter_name, full_name, cit
             logger.info(f"   ⚠️ Курьер уже существует в БД с id={exists[0]}")
             return False, "Курьер с такими данными уже подтвержден"
         
-        # Добавляем в БД со статусом pending
+        # ========== ВСТАВЛЯЕМ КУРЬЕРА ==========
         registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logger.info(f"   📦 Вставляем в БД: {recruiter_id}, {full_name}, {city}, pending, {registered_at}")
+        logger.info(f"   📦 Вставляем в БД: recruiter_id={recruiter_id}, {full_name}, {city}")
         
         c.execute('''INSERT INTO couriers 
                      (recruiter_id, full_name, city, status, registered_at)
                      VALUES (?, ?, ?, ?, ?)''',
                   (recruiter_id, full_name, city, 'pending', registered_at))
         
+        logger.info(f"   ✅ INSERT выполнен, rows affected: {conn.total_changes}")
         conn.commit()
+        
+        # ========== ПРОВЕРЯЕМ, ЧТО ЗАПИСАЛОСЬ ==========
+        c.execute("SELECT * FROM couriers WHERE recruiter_id = ? AND full_name = ? AND city = ? ORDER BY id DESC LIMIT 1", 
+                  (recruiter_id, full_name, city))
+        last = c.fetchone()
+        if last:
+            logger.info(f"   ✅ ЗАПИСЬ НАЙДЕНА В БД:")
+            logger.info(f"      id: {last[0]}")
+            logger.info(f"      recruiter_id: {last[1]}")
+            logger.info(f"      full_name: {last[2]}")
+            logger.info(f"      city: {last[3]}")
+            logger.info(f"      status: {last[4]}")
+            logger.info(f"      balance: {last[5]}")
+        else:
+            logger.error(f"   ❌ ЗАПИСЬ НЕ НАЙДЕНА В БД ПОСЛЕ INSERT!")
+        # ==============================================
         
         # ========== ОБНОВЛЯЕМ ОБЩИЙ БАЛАНС РЕКРУТЕРА ==========
         c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (recruiter_id,))
@@ -982,6 +1008,7 @@ def add_courier(recruiter_id, recruiter_username, recruiter_name, full_name, cit
             logger.info(f"✅ Курьер {full_name} добавлен, строка в таблице: {row_number}")
         
         return True, "Заявка на курьера отправлена на проверку! ✅"
+        
     except Exception as e:
         logger.error(f"❌ Ошибка в add_courier: {e}")
         import traceback
@@ -2200,6 +2227,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
