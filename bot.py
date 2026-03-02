@@ -772,8 +772,6 @@ def get_pending_withdrawals():
     except Exception as e:
         logger.error(f"Ошибка в get_pending_withdrawals: {e}")
         return []
-    finally:
-        conn.close()
 
 def confirm_withdrawal(request_id):
     conn = get_db()
@@ -783,8 +781,6 @@ def confirm_withdrawal(request_id):
         conn.commit()
     except Exception as e:
         logger.error(f"Ошибка в confirm_withdrawal: {e}")
-    finally:
-        conn.close()
 # ========== ФУНКЦИИ ДЛЯ КУРЬЕРОВ ==========
 def add_courier(recruiter_id, recruiter_username, recruiter_name, full_name, city):
     conn = get_db()
@@ -1975,6 +1971,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
