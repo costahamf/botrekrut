@@ -846,25 +846,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Вы успешно зарегистрированы в системе."
         )
     
-    # Получаем статус теста (ОТДЕЛЬНОЕ СОЕДИНЕНИЕ)
+    # Получаем статус теста
     test_passed = 0
     conn = None
     try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
-        result = c.fetchone()
-        test_passed = result[0] if result else 0
-        logger.info(f"👤 Пользователь {user_id} test_passed={test_passed}")
-        if test_passed == 1:
-            logger.info(f"   ✅ Тест пройден, показываем полное меню")
+        conn = get_db()  # ← ЭТО ВАЖНО!
+        if conn is None:
+            logger.error("❌ Не удалось получить соединение с БД")
+            test_passed = 0
         else:
-            logger.info(f"   ❌ Тест не пройден, показываем ограниченное меню")
+            c = conn.cursor()
+            c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
+            result = c.fetchone()
+            test_passed = result[0] if result else 0
+            logger.info(f"👤 Пользователь {user_id} test_passed={test_passed}")
+            if test_passed == 1:
+                logger.info(f"   ✅ Тест пройден, показываем полное меню")
+            else:
+                logger.info(f"   ❌ Тест не пройден, показываем ограниченное меню")
     except Exception as e:
         logger.error(f"Ошибка при проверке test_passed в start: {e}")
+        test_passed = 0
     finally:
         if conn:
             conn.close()
+            logger.debug("🔒 Соединение с БД закрыто")
     
     if test_passed == 1:
         keyboard = [
@@ -1904,6 +1910,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
