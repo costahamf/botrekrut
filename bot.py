@@ -653,7 +653,7 @@ def close_ticket(ticket_id, admin_reply):
         conn.close()
 
 # ========== ФУНКЦИИ ДЛЯ ВЫВОДА ==========
-ddef get_user_balance(user_id):
+def get_user_balance(user_id):
     """Получает баланс пользователя (сумму всех курьеров)"""
     conn = None
     try:
@@ -1861,6 +1861,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
