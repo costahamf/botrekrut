@@ -868,7 +868,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Проверка доступа для обычных пользователей
-    conn = None
+    conn = None  # ← это твоя строка 871?
     try:
         conn = get_db()
         c = conn.cursor()
@@ -1861,6 +1861,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
