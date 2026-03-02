@@ -452,16 +452,24 @@ def update_test_status(user_id, passed):
         c = conn.cursor()
         
         # Проверяем, есть ли пользователь
-        c.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
-        if not c.fetchone():
+        c.execute("SELECT user_id, username, first_name, last_name FROM users WHERE user_id = ?", (user_id,))
+        user = c.fetchone()
+        
+        if not user:
             logger.warning(f"⚠️ Пользователь {user_id} не найден, создаём принудительно")
             registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Используем значения по умолчанию, так как у нас нет данных пользователя
+            default_username = f"user_{user_id}"
+            default_first_name = "Пользователь"
+            default_last_name = ""
+            
             c.execute("""
                 INSERT INTO users 
                 (user_id, username, first_name, last_name, registration_date, balance, test_passed) 
                 VALUES (?, ?, ?, ?, ?, 0, ?)
-            """, (user_id, username or f"user_{user_id}", first_name or "Пользователь", last_name or "", registration_date, 1 if passed else 0))
-            logger.info(f"✅ Пользователь {user_id} создан принудительно")
+            """, (user_id, default_username, default_first_name, default_last_name, registration_date, 1 if passed else 0))
+            conn.commit()
+            logger.info(f"✅ Пользователь {user_id} создан принудительно с username {default_username}")
         
         # Обновляем статус
         logger.info(f"📝 Обновление test_passed для user_id={user_id} на {1 if passed else 0}")
@@ -484,6 +492,7 @@ def update_test_status(user_id, passed):
         logger.error(f"Ошибка в update_test_status: {e}")
         import traceback
         traceback.print_exc()
+    # НЕТ finally с conn.close()!
 
 # ========== КОНЕЦ НОВОЙ ФУНКЦИИ ==========
 
@@ -1971,6 +1980,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
