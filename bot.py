@@ -2059,6 +2059,51 @@ async def admin_check_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
+# ========== СЮДА ВСТАВЛЯЕМ НОВУЮ ФУНКЦИЮ ==========
+async def admin_check_couriers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка всех курьеров в БД"""
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Смотрим всех курьеров с их рекрутерами
+        c.execute('''
+            SELECT c.id, c.full_name, c.city, c.status, c.balance, c.recruiter_id, u.username, u.first_name
+            FROM couriers c
+            LEFT JOIN users u ON c.recruiter_id = u.user_id
+            ORDER BY c.id DESC
+        ''')
+        couriers = c.fetchall()
+        
+        if not couriers:
+            await update.message.reply_text("📭 В БД нет курьеров")
+            return
+        
+        text = "📋 *ВСЕ КУРЬЕРЫ В БД:*\n\n"
+        for courier in couriers:
+            id, name, city, status, balance, recruiter_id, username, first_name = courier
+            status_emoji = "✅" if status == 'confirmed' else "⏳" if status == 'pending' else "❌"
+            recruiter_info = f"@{username}" if username else f"ID:{recruiter_id}"
+            if recruiter_id == update.effective_user.id:
+                recruiter_info += " 👈 ЭТО ТЫ!"
+            
+            text += f"{status_emoji} *{name}* - {city}\n"
+            text += f"   🆔 Курьера: {id}\n"
+            text += f"   👤 Рекрутер: {recruiter_info}\n"
+            text += f"   💰 Баланс: {balance}\n\n"
+        
+        # Разбиваем на части если слишком длинно
+        if len(text) > 4000:
+            for i in range(0, len(text), 4000):
+                await update.message.reply_text(text[i:i+4000], parse_mode='Markdown')
+        else:
+            await update.message.reply_text(text, parse_mode='Markdown')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
 
 # ========== ТЕСТ GOOGLE SHEETS ==========
 async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2141,7 +2186,8 @@ def main():
     
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("sync", admin_sync))
-    application.add_handler(CommandHandler("checkdb", admin_check_db))  # ← добавить эту строку
+    application.add_handler(CommandHandler("checkdb", admin_check_db))
+    application.add_handler(CommandHandler("couriers", admin_check_couriers))  # ← добавить эту строку
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin_requests))
     application.add_handler(CommandHandler("testgoogle", test_google))
@@ -2154,6 +2200,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
