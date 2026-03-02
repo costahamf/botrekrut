@@ -705,8 +705,6 @@ def get_open_tickets():
     except Exception as e:
         logger.error(f"Ошибка в get_open_tickets: {e}")
         return []
-    finally:
-        conn.close()
 
 def get_ticket(ticket_id):
     conn = get_db()
@@ -717,8 +715,6 @@ def get_ticket(ticket_id):
     except Exception as e:
         logger.error(f"Ошибка в get_ticket: {e}")
         return None
-    finally:
-        conn.close()
 
 def close_ticket(ticket_id, admin_reply):
     conn = get_db()
@@ -732,8 +728,6 @@ def close_ticket(ticket_id, admin_reply):
         conn.commit()
     except Exception as e:
         logger.error(f"Ошибка в close_ticket: {e}")
-    finally:
-        conn.close()
 
 # ========== ФУНКЦИИ ДЛЯ ВЫВОДА ==========
 def get_user_balance(user_id):
@@ -764,8 +758,6 @@ def create_withdrawal_request(user_id, amount, method, details):
     except Exception as e:
         logger.error(f"Ошибка в create_withdrawal_request: {e}")
         return None
-    finally:
-        conn.close()
 
 def get_pending_withdrawals():
     conn = get_db()
@@ -1980,6 +1972,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
