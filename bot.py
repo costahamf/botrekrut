@@ -1959,36 +1959,6 @@ async def admin_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка синхронизации: {str(e)}")
-async def admin_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Принудительная синхронизация статусов с Google Sheets (только для админа)"""
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ У вас нет прав администратора")
-        return
-    
-    status_msg = await update.message.reply_text("🔄 Начинаю синхронизацию с Google Sheets...")
-    
-    try:
-        # Запускаем синхронизацию
-        check_pending_couriers()
-        
-        # Получаем статистику
-        conn = get_db()
-        c = conn.cursor()
-        
-        # Считаем курьеров по статусам
-        c.execute("SELECT status, COUNT(*) FROM couriers GROUP BY status")
-        stats = c.fetchall()
-        
-        stats_text = "\n".join([f"• {s[0]}: {s[1]}" for s in stats]) if stats else "• нет данных"
-        
-        await status_msg.edit_text(
-            f"✅ *Синхронизация завершена!*\n\n"
-            f"📊 *Текущая статистика курьеров:*\n{stats_text}",
-            parse_mode='Markdown'
-        )
-        
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка синхронизации: {str(e)}")
 
 # ========== СЮДА ВСТАВЛЯЕМ НОВУЮ ФУНКЦИЮ ==========
 async def admin_check_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2129,6 +2099,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
