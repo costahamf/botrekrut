@@ -1450,6 +1450,7 @@ async def handle_test_answer(query, user_id, context):
         context.user_data['test_current'] = current + 1
         
         if context.user_data['test_current'] >= len(questions):
+            logger.info("🔥 ТЕСТ ЗАВЕРШЕН, вызываем finish_test")
             await finish_test(query, context)
             return
         
@@ -1913,6 +1914,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
