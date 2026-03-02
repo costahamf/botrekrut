@@ -44,11 +44,11 @@ DB_CONN = None
 BACKUP_FILE = 'backup.json'
 
 def get_db():
-    """Возвращает соединение с БД"""
+    """Возвращает соединение с БД (ФАЙЛ, а не память!)"""
     global DB_CONN
     try:
         if DB_CONN is None:
-            # Вместо :memory: используем файл
+            # ВАЖНО: используем ФАЙЛ, а не :memory:
             DB_CONN = sqlite3.connect('bot_database.db', check_same_thread=False)
             init_database_tables(DB_CONN)
             load_backup()  # загружаем бэкап если есть
@@ -1972,6 +1972,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
