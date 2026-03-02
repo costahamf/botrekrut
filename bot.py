@@ -846,16 +846,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Вы успешно зарегистрированы в системе."
         )
     
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
-    result = c.fetchone()
-    test_passed = result[0] if result else 0
-    logger.info(f"👤 Пользователь {user_id} test_passed={test_passed}")
-    if test_passed == 1:
-        logger.info(f"   ✅ Тест пройден, показываем полное меню")
-    else:
-        logger.info(f"   ❌ Тест не пройден, показываем ограниченное меню")
+    # Получаем статус теста (ОТДЕЛЬНОЕ СОЕДИНЕНИЕ)
+    test_passed = 0
+    conn = None
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
+        result = c.fetchone()
+        test_passed = result[0] if result else 0
+        logger.info(f"👤 Пользователь {user_id} test_passed={test_passed}")
+        if test_passed == 1:
+            logger.info(f"   ✅ Тест пройден, показываем полное меню")
+        else:
+            logger.info(f"   ❌ Тест не пройден, показываем ограниченное меню")
+    except Exception as e:
+        logger.error(f"Ошибка при проверке test_passed в start: {e}")
+    finally:
+        if conn:
+            conn.close()
     
     if test_passed == 1:
         keyboard = [
@@ -880,7 +889,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
-
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1896,6 +1904,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
