@@ -311,9 +311,14 @@ def is_registered(user_id):
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        c.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
         result = c.fetchone()
-        return result is not None
+        if result:
+            logger.info(f"✅ Пользователь {user_id} найден в БД")
+            return True
+        else:
+            logger.info(f"❌ Пользователь {user_id} НЕ найден в БД")
+            return False
     except Exception as e:
         logger.error(f"Ошибка в is_registered: {e}")
         return False
@@ -342,7 +347,10 @@ def register_user(user_id, username, first_name, last_name):
                 conn.close()
             except:
                 pass
+
+# ========== СЮДА ВСТАВЬ НОВУЮ ФУНКЦИЮ ==========
 def update_test_status(user_id, passed):
+    """Обновляет статус теста пользователя"""
     conn = None
     try:
         conn = get_db()
@@ -351,15 +359,22 @@ def update_test_status(user_id, passed):
             return
             
         c = conn.cursor()
-        logger.info(f"📝 Обновление test_passed для user_id={user_id} на {1 if passed else 0}")
         
-        # Сначала проверяем, есть ли пользователь
+        # Проверяем, есть ли пользователь
         c.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
         if not c.fetchone():
-            logger.error(f"❌ Пользователь {user_id} не найден в БД")
-            return
+            logger.warning(f"⚠️ Пользователь {user_id} не найден, создаём принудительно")
+            registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            c.execute("""
+                INSERT INTO users 
+                (user_id, username, first_name, last_name, registration_date, balance, test_passed) 
+                VALUES (?, ?, ?, ?, ?, 0, ?)
+            """, (user_id, f"user_{user_id}", "Пользователь", "", registration_date, 1 if passed else 0))
+            conn.commit()
+            logger.info(f"✅ Пользователь {user_id} создан принудительно")
         
         # Обновляем статус
+        logger.info(f"📝 Обновление test_passed для user_id={user_id} на {1 if passed else 0}")
         c.execute("UPDATE users SET test_passed = ?, last_test_attempt = ? WHERE user_id = ?",
                   (1 if passed else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
         conn.commit()
@@ -385,6 +400,8 @@ def update_test_status(user_id, passed):
                 conn.close()
             except:
                 pass
+
+# ========== КОНЕЦ НОВОЙ ФУНКЦИИ ==========
 
 def can_take_test(user_id):
     conn = None
@@ -792,6 +809,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👋 Добро пожаловать, {user.first_name}!\n\n"
             "Вы успешно зарегистрированы в системе."
         )
+    else:
+        logger.info(f"👤 Пользователь {user_id} уже зарегистрирован")
     
     # Получаем статус теста
     test_passed = 0
@@ -1894,6 +1913,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
