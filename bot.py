@@ -46,11 +46,21 @@ BACKUP_FILE = 'backup.json'
 def get_db():
     """Возвращает соединение с БД в памяти"""
     global DB_CONN
-    if DB_CONN is None:
+    try:
+        if DB_CONN is None:
+            DB_CONN = sqlite3.connect(':memory:', check_same_thread=False)
+            init_database_tables(DB_CONN)
+            load_backup()
+        # Проверяем, не закрыто ли соединение
+        DB_CONN.cursor().execute("SELECT 1").fetchone()
+        return DB_CONN
+    except sqlite3.ProgrammingError:
+        # Если соединение закрыто, создаем новое
+        logger.warning("⚠️ Соединение с БД было закрыто, создаем новое")
         DB_CONN = sqlite3.connect(':memory:', check_same_thread=False)
         init_database_tables(DB_CONN)
         load_backup()
-    return DB_CONN
+        return DB_CONN
 
 def init_database_tables(conn):
     """Создает таблицы в переданном соединении"""
@@ -108,8 +118,15 @@ def init_database_tables(conn):
 
 def backup_database():
     """Сохраняет все данные в JSON файл"""
+    conn = None
     try:
-        conn = get_db()
+        # ВАЖНО: создаем НОВОЕ соединение, а не используем глобальное
+        conn = sqlite3.connect(':memory:')
+        
+        # Копируем данные из глобальной БД
+        if DB_CONN is not None:
+            DB_CONN.backup(conn)
+        
         c = conn.cursor()
         
         # Собираем все данные
@@ -130,6 +147,12 @@ def backup_database():
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения бэкапа: {e}")
         return False
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except:
+                pass
 
 def load_backup():
     """Загружает данные из JSON файла"""
@@ -1847,6 +1870,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
