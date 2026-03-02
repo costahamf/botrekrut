@@ -572,24 +572,12 @@ def update_test_status(user_id, passed):
         c = conn.cursor()
         
         # Проверяем, есть ли пользователь
-        c.execute("SELECT user_id, username, first_name, last_name FROM users WHERE user_id = ?", (user_id,))
-        user = c.fetchone()
-        
-        if not user:
-            logger.warning(f"⚠️ Пользователь {user_id} не найден, создаём принудительно")
-            registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            # Используем значения по умолчанию, так как у нас нет данных пользователя
-            default_username = f"user_{user_id}"
-            default_first_name = "Пользователь"
-            default_last_name = ""
-            
-            c.execute("""
-                INSERT INTO users 
-                (user_id, username, first_name, last_name, registration_date, balance, test_passed) 
-                VALUES (?, ?, ?, ?, ?, 0, ?)
-            """, (user_id, default_username, default_first_name, default_last_name, registration_date, 1 if passed else 0))
-            conn.commit()
-            logger.info(f"✅ Пользователь {user_id} создан принудительно с username {default_username}")
+        c.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+        if not c.fetchone():
+            # Если пользователя нет - НЕ СОЗДАЕМ ФЕЙКОВОГО!
+            # Просто логируем и выходим
+            logger.warning(f"⚠️ Пользователь {user_id} не найден в БД")
+            return
         
         # Обновляем статус
         logger.info(f"📝 Обновление test_passed для user_id={user_id} на {1 if passed else 0}")
@@ -2233,6 +2221,64 @@ async def admin_fix_my_couriers(update: Update, context: ContextTypes.DEFAULT_TY
         
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
+async def admin_fix_my_couriers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Исправляет только курьеров, созданных через бота"""
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Находим курьеров, у которых нет recruiter_id, но они есть в Google Sheets с твоим username
+        c.execute('''
+            UPDATE couriers 
+            SET recruiter_id = ? 
+            WHERE recruiter_id IS NULL 
+            AND sheet_row IS NOT NULL
+        ''', (ADMIN_ID,))
+        
+        updated = c.rowcount
+        conn.commit()
+        
+        await update.message.reply_text(
+            f"✅ Исправлено {updated} курьеров!\n"
+            f"Теперь они привязаны к твоему ID ({ADMIN_ID})"
+        )
+        
+        # Показываем обновленный список
+        await admin_check_couriers(update, context)
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
+# ========== СЮДА ВСТАВЛЯЕМ НОВУЮ ФУНКЦИЮ ==========
+async def admin_fix_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Исправляет фейковых пользователей на реальные данные"""
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Обновляем твоего пользователя
+        c.execute('''
+            UPDATE users 
+            SET username = ?, first_name = ? 
+            WHERE user_id = ?
+        ''', ("unknownsorcerer", "costa", ADMIN_ID))
+        
+        updated = c.rowcount
+        conn.commit()
+        
+        await update.message.reply_text(
+            f"✅ Исправлен пользователь с ID {ADMIN_ID}\n"
+            f"Теперь username: @unknownsorcerer, имя: costa"
+        )
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
 
 # ========== ТЕСТ GOOGLE SHEETS ==========
 async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2324,12 +2370,14 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(CallbackQueryHandler(next_question_callback, pattern='^next_question$'))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(CommandHandler("fixusers", admin_fix_users))
     
     logger.info("Бот запускается...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
+
 
 
 
