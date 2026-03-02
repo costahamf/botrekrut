@@ -475,12 +475,31 @@ def load_from_google_sheets():
                 elif 'Подтвержден' in status_text or '✅' in status_text:
                     status = 'confirmed'
                 
-                # Вставляем или обновляем запись
-                c.execute('''
-                    INSERT OR REPLACE INTO couriers 
-                    (full_name, city, status, registered_at, sheet_row) 
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (full_name, city, status, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), i + 2))
+                # ========== ИЩЕМ RECRUITER_ID по username из таблицы ==========
+                recruiter_username = record.get('Username рекрутера', '').replace('@', '').strip()
+                recruiter_id = None
+                
+                if recruiter_username:
+                    c.execute("SELECT user_id FROM users WHERE username = ?", (recruiter_username,))
+                    user = c.fetchone()
+                    if user:
+                        recruiter_id = user[0]
+                        logger.info(f"   👤 Найден рекрутер @{recruiter_username} с ID {recruiter_id}")
+                # ============================================================
+                
+                # Вставляем или обновляем запись С recruiter_id
+                if recruiter_id:
+                    c.execute('''
+                        INSERT OR REPLACE INTO couriers 
+                        (recruiter_id, full_name, city, status, registered_at, sheet_row) 
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (recruiter_id, full_name, city, status, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), i + 2))
+                    logger.info(f"✅ Загружен курьер {full_name} для рекрутера {recruiter_id}")
+                else:
+                    # Если рекрутер не найден, вставляем без привязки (или пропускаем)
+                    logger.warning(f"⚠️ Курьер {full_name} пропущен - рекрутер @{recruiter_username} не найден")
+                    # Можно вставить без привязки, но тогда он ничей
+                    # c.execute(...) без recruiter_id
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка при обработке строки {i+2}: {e}")
@@ -2138,6 +2157,82 @@ async def admin_check_couriers(update: Update, context: ContextTypes.DEFAULT_TYP
         
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
+async def admin_check_couriers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка всех курьеров в БД"""
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Смотрим всех курьеров с их рекрутерами
+        c.execute('''
+            SELECT c.id, c.full_name, c.city, c.status, c.balance, c.recruiter_id, u.username, u.first_name
+            FROM couriers c
+            LEFT JOIN users u ON c.recruiter_id = u.user_id
+            ORDER BY c.id DESC
+        ''')
+        couriers = c.fetchall()
+        
+        if not couriers:
+            await update.message.reply_text("📭 В БД нет курьеров")
+            return
+        
+        text = "📋 *ВСЕ КУРЬЕРЫ В БД:*\n\n"
+        for courier in couriers:
+            id, name, city, status, balance, recruiter_id, username, first_name = courier
+            status_emoji = "✅" if status == 'confirmed' else "⏳" if status == 'pending' else "❌"
+            recruiter_info = f"@{username}" if username else f"ID:{recruiter_id}"
+            if recruiter_id == update.effective_user.id:
+                recruiter_info += " 👈 ЭТО ТЫ!"
+            
+            text += f"{status_emoji} *{name}* - {city}\n"
+            text += f"   🆔 Курьера: {id}\n"
+            text += f"   👤 Рекрутер: {recruiter_info}\n"
+            text += f"   💰 Баланс: {balance}\n\n"
+        
+        # Разбиваем на части если слишком длинно
+        if len(text) > 4000:
+            for i in range(0, len(text), 4000):
+                await update.message.reply_text(text[i:i+4000], parse_mode='Markdown')
+        else:
+            await update.message.reply_text(text, parse_mode='Markdown')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
+# ========== СЮДА ВСТАВЛЯЕМ НОВУЮ ФУНКЦИЮ ==========
+async def admin_fix_my_couriers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Исправляет только курьеров, созданных через бота"""
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Находим курьеров, у которых нет recruiter_id, но они есть в Google Sheets с твоим username
+        c.execute('''
+            UPDATE couriers 
+            SET recruiter_id = ? 
+            WHERE recruiter_id IS NULL 
+            AND sheet_row IS NOT NULL
+        ''', (ADMIN_ID,))
+        
+        updated = c.rowcount
+        conn.commit()
+        
+        await update.message.reply_text(
+            f"✅ Исправлено {updated} курьеров!\n"
+            f"Теперь они привязаны к твоему ID ({ADMIN_ID})"
+        )
+        
+        # Показываем обновленный список
+        await admin_check_couriers(update, context)
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
 
 # ========== ТЕСТ GOOGLE SHEETS ==========
 async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2221,7 +2316,8 @@ def main():
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("sync", admin_sync))
     application.add_handler(CommandHandler("checkdb", admin_check_db))
-    application.add_handler(CommandHandler("couriers", admin_check_couriers))  # ← добавить эту строку
+    application.add_handler(CommandHandler("couriers", admin_check_couriers))
+    application.add_handler(CommandHandler("fixmy", admin_fix_my_couriers))  # ← добавить эту строку
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin_requests))
     application.add_handler(CommandHandler("testgoogle", test_google))
@@ -2234,6 +2330,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
