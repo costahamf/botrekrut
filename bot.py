@@ -1811,44 +1811,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========== АДМИН-КОМАНДЫ ==========
+# ========== АДМИН-КОМАНДЫ ==========
 async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ У вас нет прав администратора")
-        return
-    
-    tickets = get_open_tickets()
-    withdrawals = get_pending_withdrawals()
-    
-    if not tickets and not withdrawals:
-        await update.message.reply_text("📭 Нет активных обращений")
-        return
-    
-    text = ""
-    
-    if tickets:
-        text += "🆘 АКТИВНЫЕ ОБРАЩЕНИЯ В ПОДДЕРЖКУ:\n\n"
-        for ticket in tickets:
-            text += f"🆔 {ticket[0]}\n"
-            text += f"👤 {ticket[3]} (@{ticket[2]})\n"
-            text += f"📝 {ticket[4][:100]}...\n"
-            text += f"📅 {ticket[5]}\n"
-            text += "──────────────────────\n"
-    
-    if withdrawals:
-        if tickets:
-            text += "\n"
-        text += "💰 ОЖИДАЮЩИЕ ЗАЯВКИ НА ВЫВОД:\n\n"
-        for w in withdrawals:
-            text += f"🆔 {w[0]}\n"
-            text += f"👤 {w[2]} (@{w[3]})\n"
-            text += f"💰 {w[4]} руб.\n"
-            text += f"💳 {w[5]}\n"
-            text += f"📝 {w[6]}\n"
-            text += f"📅 {w[7]}\n"
-            text += "──────────────────────\n"
-    
-    await update.message.reply_text(text)
-    async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ У вас нет прав администратора")
         return
@@ -2011,6 +1975,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
