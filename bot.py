@@ -274,9 +274,23 @@ def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, c
     except Exception as e:
         logger.error(f"Ошибка добавления в Google Sheets: {e}")
         return None, None
-
+def update_courier_status_in_sheet(sheet_row, status_text):
+    """Обновляет статус в Google Sheets"""
+    try:
+        sheet = get_google_sheet()
+        if not sheet:
+            logger.error("❌ Не удалось подключиться к Google Sheets для обновления статуса")
+            return False
+        
+        # Обновляем статус в колонке СТАТУС (колонка F, т.к. A=1, B=2, C=3, D=4, E=5, F=6)
+        sheet.update_cell(sheet_row, 6, status_text)  # 6 = колонка F (СТАТУС)
+        logger.info(f"✅ Обновлен статус в Google Sheets: строка {sheet_row}, статус {status_text}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка обновления статуса в Google Sheets: {e}")
+        return False
 def check_pending_couriers():
-    """Проверяет статусы курьеров в Google Sheets и обновляет БД"""
+    """Проверяет статусы курьеров в Google Sheets и синхронизирует с БД в обе стороны"""
     try:
         sheet = get_google_sheet()
         if not sheet:
@@ -289,79 +303,122 @@ def check_pending_couriers():
         conn = get_db()
         c = conn.cursor()
         
-        updated_count = 0
-        new_count = 0
+        updated_count = 0          # сколько обновлено в БД
+        new_count = 0               # сколько добавлено в БД
+        sheet_updated_count = 0     # сколько обновлено в таблице
         
         for i, record in enumerate(records):
             try:
-                # Получаем данные из таблицы по ТВОИМ колонкам
-                full_name = record.get('ФИО клиента') or ''
-                city = record.get('Город') or ''
-                status_text = record.get('СТАТУС') or ''
-                accepted = record.get('ПРИНЯТО') or '0'
-                rejected = record.get('ОТКЛОНЕНО') or '0'
+                # ========== ПОЛУЧАЕМ ДАННЫЕ ИЗ ТАБЛИЦЫ ==========
+                full_name = record.get('ФИО клиента', '').strip()
+                city = record.get('Город', '').strip()
+                status_text = record.get('СТАТУС', '').strip()
                 
-                sheet_row = i + 2  # номер строки в таблице
+                # ПРИНЯТО и ОТКЛОНЕНО могут быть числами или строками
+                accepted_raw = record.get('ПРИНЯТО', '0')
+                rejected_raw = record.get('ОТКЛОНЕНО', '0')
+                
+                # Преобразуем в строку и чистим
+                accepted = str(accepted_raw).strip()
+                rejected = str(rejected_raw).strip()
+                
+                sheet_row = i + 2  # номер строки в таблице (+2 потому что 1 строка - заголовки)
                 
                 # Пропускаем пустые строки
                 if not full_name or not city:
                     continue
                 
-                # ОПРЕДЕЛЯЕМ СТАТУС (приоритет: ПРИНЯТО -> ОТКЛОНЕНО -> СТАТУС)
-                status = 'pending'
+                # ========== ОПРЕДЕЛЯЕМ СТАТУС ==========
+                # Приоритет: ПРИНЯТО -> ОТКЛОНЕНО -> СТАТУС
+                new_status = None
+                new_status_text = None
                 
-                # 1. Сначала проверяем ПРИНЯТО (самое главное!)
-                if str(accepted).strip() == '1':
-                    status = 'confirmed'
-                    logger.info(f"✅ Курьер {full_name} ПОДТВЕРЖДЕН (ПРИНЯТО=1)")
+                # 1. Проверяем ПРИНЯТО
+                if accepted in ['1', 'true', 'True', 'TRUE', 'yes', 'Yes', 'YES', '✅', '☑']:
+                    new_status = 'confirmed'
+                    new_status_text = "✅ Подтвержден"
+                    logger.info(f"✅ Курьер {full_name} ПОДТВЕРЖДЕН (ПРИНЯТО={accepted_raw})")
                 
-                # 2. Если не принято, проверяем ОТКЛОНЕНО
-                elif str(rejected).strip() == '1':
-                    status = 'rejected'
-                    logger.info(f"❌ Курьер {full_name} ОТКЛОНЕН (ОТКЛОНЕНО=1)")
+                # 2. Проверяем ОТКЛОНЕНО
+                elif rejected in ['1', 'true', 'True', 'TRUE', 'yes', 'Yes', 'YES', '❌']:
+                    new_status = 'rejected'
+                    new_status_text = "❌ Отклонен"
+                    logger.info(f"❌ Курьер {full_name} ОТКЛОНЕН (ОТКЛОНЕНО={rejected_raw})")
                 
-                # 3. Если нет 1 в принято/отклонено, смотрим СТАТУС
-                elif 'Подтвержден' in status_text or '✅' in status_text or '☑' in status_text:
-                    status = 'confirmed'
-                elif 'Ожидает' in status_text or '⏳' in status_text:
-                    status = 'pending'
+                # 3. Если нет 1 в ПРИНЯТО/ОТКЛОНЕНО, смотрим СТАТУС
+                else:
+                    if 'Подтвержден' in status_text or '✅' in status_text or '☑' in status_text:
+                        new_status = 'confirmed'
+                    elif 'Отклонен' in status_text or '❌' in status_text:
+                        new_status = 'rejected'
+                    else:
+                        new_status = 'pending'
+                        new_status_text = "⏳ Ожидает"
                 
-                # Проверяем, есть ли уже такой курьер в БД
-                c.execute('''SELECT id, status FROM couriers 
+                # ========== ПРОВЕРЯЕМ, ЕСТЬ ЛИ КУРЬЕР В БД ==========
+                c.execute('''SELECT id, status, sheet_row FROM couriers 
                              WHERE full_name = ? AND city = ? ORDER BY id DESC LIMIT 1''',
                           (full_name, city))
                 existing = c.fetchone()
                 
                 if existing:
-                    # Обновляем статус если изменился
-                    if existing[1] != status:
+                    # КУРЬЕР УЖЕ ЕСТЬ В БД
+                    existing_id, existing_status, existing_sheet_row = existing
+                    
+                    # Проверяем, нужно ли обновить статус в БД
+                    if existing_status != new_status:
                         c.execute('''UPDATE couriers 
                                      SET status = ?, confirmed_at = ? 
                                      WHERE id = ?''',
-                                  (status, datetime.now().strftime("%Y-%m-%d %H:%M:%S") if status == 'confirmed' else None, existing[0]))
+                                  (new_status, 
+                                   datetime.now().strftime("%Y-%m-%d %H:%M:%S") if new_status == 'confirmed' else None,
+                                   existing_id))
                         updated_count += 1
-                        logger.info(f"🔄 Обновлен статус курьера {full_name}: {existing[1]} -> {status}")
+                        logger.info(f"🔄 Обновлен статус в БД: {full_name}: {existing_status} -> {new_status}")
+                        
+                        # Если у нас есть новый статус для таблицы и знаем номер строки
+                        if new_status_text and existing_sheet_row:
+                            update_courier_status_in_sheet(existing_sheet_row, new_status_text)
+                            sheet_updated_count += 1
+                    
+                    # Проверяем, нужно ли обновить номер строки в БД (если он изменился)
+                    if existing_sheet_row != sheet_row:
+                        c.execute("UPDATE couriers SET sheet_row = ? WHERE id = ?", (sheet_row, existing_id))
+                        logger.info(f"📝 Обновлен номер строки для {full_name}: {existing_sheet_row} -> {sheet_row}")
+                
                 else:
-                    # Если курьера нет в БД, добавляем
+                    # КУРЬЕРА НЕТ В БД - ДОБАВЛЯЕМ
                     registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     c.execute('''INSERT INTO couriers 
                                  (full_name, city, status, registered_at, sheet_row) 
                                  VALUES (?, ?, ?, ?, ?)''',
-                              (full_name, city, status, registered_at, sheet_row))
+                              (full_name, city, new_status, registered_at, sheet_row))
                     new_count += 1
-                    logger.info(f"✅ Добавлен новый курьер из таблицы: {full_name}")
+                    logger.info(f"✅ Добавлен новый курьер в БД: {full_name} (статус: {new_status})")
+                    
+                    # Если у нас есть статус для таблицы, обновляем её
+                    if new_status_text:
+                        update_courier_status_in_sheet(sheet_row, new_status_text)
+                        sheet_updated_count += 1
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка при обработке строки {i+2}: {e}")
+                logger.error(f"   Данные строки: {record}")
                 continue
         
         conn.commit()
         
-        if updated_count > 0 or new_count > 0:
-            logger.info(f"📊 Результаты синхронизации: обновлено {updated_count}, добавлено {new_count}")
+        # ========== ЛОГИРУЕМ РЕЗУЛЬТАТЫ ==========
+        if updated_count > 0 or new_count > 0 or sheet_updated_count > 0:
+            logger.info(f"📊 ИТОГИ СИНХРОНИЗАЦИИ:")
+            logger.info(f"   • Обновлено в БД: {updated_count}")
+            logger.info(f"   • Добавлено в БД: {new_count}")
+            logger.info(f"   • Обновлено в таблице: {sheet_updated_count}")
+        else:
+            logger.info("📊 Синхронизация завершена - изменений нет")
         
     except Exception as e:
-        logger.error(f"❌ Ошибка проверки статусов: {e}")
+        logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА В check_pending_couriers: {e}")
         import traceback
         traceback.print_exc()
 def load_from_google_sheets():
@@ -1996,6 +2053,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
