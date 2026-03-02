@@ -352,6 +352,14 @@ def update_test_status(user_id, passed):
             
         c = conn.cursor()
         logger.info(f"📝 Обновление test_passed для user_id={user_id} на {1 if passed else 0}")
+        
+        # Сначала проверяем, есть ли пользователь
+        c.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+        if not c.fetchone():
+            logger.error(f"❌ Пользователь {user_id} не найден в БД")
+            return
+        
+        # Обновляем статус
         c.execute("UPDATE users SET test_passed = ?, last_test_attempt = ? WHERE user_id = ?",
                   (1 if passed else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
         conn.commit()
@@ -359,16 +367,18 @@ def update_test_status(user_id, passed):
         # Проверяем, что обновилось
         c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
         new_value = c.fetchone()
-        logger.info(f"   ✅ После обновления test_passed={new_value[0] if new_value else None}")
         
-        # ДОБАВЬ ЭТУ ПРОВЕРКУ:
-        if passed and new_value and new_value[0] == 1:
-            logger.info(f"   🎉 ПОЛЬЗОВАТЕЛЬ {user_id} УСПЕШНО СДАЛ ТЕСТ!")
-        elif not passed and new_value and new_value[0] == 0:
-            logger.info(f"   📝 ПОЛЬЗОВАТЕЛЬ {user_id} НЕ СДАЛ ТЕСТ")
+        if new_value:
+            logger.info(f"   ✅ После обновления test_passed={new_value[0]}")
+            if passed and new_value[0] == 1:
+                logger.info(f"   🎉 ПОЛЬЗОВАТЕЛЬ {user_id} УСПЕШНО СДАЛ ТЕСТ!")
+        else:
+            logger.error(f"   ❌ Не удалось прочитать обновленное значение")
             
     except Exception as e:
         logger.error(f"Ошибка в update_test_status: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         if conn:
             try:
@@ -1884,6 +1894,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
