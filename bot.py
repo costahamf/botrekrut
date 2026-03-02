@@ -1461,21 +1461,23 @@ async def next_question_callback(update: Update, context: ContextTypes.DEFAULT_T
             query, context,
             "❌ Произошла ошибка. Начните тест заново."
         )
-
 async def finish_test(query, context):
     answers = context.user_data.get('test_answers', [])
     correct_count = sum(1 for a in answers if a)
     user_id = query.from_user.id
     
     if correct_count >= 7:
-        update_test_status(user_id, True)
-        text = (
-            f"🎉 *Тест пройден!*\n\n"
-            f"Правильных ответов: *{correct_count} из 10*\n\n"
-            f"✅ Вам открыт полный доступ ко всем разделам!"
-        )
-        # ← ВАЖНО: здесь должна быть кнопка "В главное меню", а не "Пройти тест"
-        keyboard = [[InlineKeyboardButton("🏠 В главное меню", callback_data='back_to_main')]]
+        # Пытаемся обновить статус в БД
+        try:
+            update_test_status(user_id, True)
+            logger.info(f"✅ Тест сдан успешно, статус обновлен для user_id={user_id}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при обновлении статуса: {e}")
+        
+        # Принудительно показываем главное меню
+        await back_to_main(query, user_id, context)
+        return
+        
     elif correct_count < 3:
         update_test_status(user_id, False)
         text = (
@@ -1483,7 +1485,6 @@ async def finish_test(query, context):
             f"Правильных ответов: *{correct_count} из 10*\n\n"
             f"⏳ Следующая попытка будет доступна через *30 минут*."
         )
-        # ← ВАЖНО: здесь должна быть кнопка "В главное меню"
         keyboard = [[InlineKeyboardButton("🏠 В главное меню", callback_data='back_to_main')]]
     else:
         update_test_status(user_id, False)
@@ -1492,7 +1493,6 @@ async def finish_test(query, context):
             f"Правильных ответов: *{correct_count} из 10*\n\n"
             f"📝 Вы можете попробовать снова прямо сейчас."
         )
-        # ← А вот здесь можно оставить кнопку "Пройти тест заново"
         keyboard = [[InlineKeyboardButton("📝 Пройти тест заново", callback_data='take_test')]]
     
     context.user_data.pop('test_answers', None)
@@ -1683,13 +1683,18 @@ async def back_to_main(query, user_id, context):
             c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
             result = c.fetchone()
             test_passed = result[0] if result else 0
-            logger.info(f"📊 back_to_main: user_id={user_id}, test_passed={test_passed}")  # Добавь это
+            logger.info(f"📊 back_to_main: user_id={user_id}, test_passed={test_passed}")
     except Exception as e:
         logger.error(f"Ошибка при проверке test_passed в back_to_main: {e}")
+        test_passed = 0  # По умолчанию считаем что тест не пройден
     finally:
         if conn:
-            conn.close()
+            try:
+                conn.close()
+            except:
+                pass
     
+    # ВАЖНО: даже если произошла ошибка, показываем меню
     if test_passed == 1:
         keyboard = [
             [InlineKeyboardButton("📋 Вся информация", callback_data='all_info')],
@@ -1707,12 +1712,21 @@ async def back_to_main(query, user_id, context):
         ]
         menu_text = "📚 *Для доступа к полному функционалу необходимо пройти тест*\n\nВыберите действие:"
     
-    await edit_and_track(
-        query, context,
-        menu_text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    try:
+        await edit_and_track(
+            query, context,
+            menu_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при показе меню: {e}")
+        # Если не получилось отредактировать, пробуем отправить новое сообщение
+        await query.message.reply_text(
+            menu_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
 # ========== ОБРАБОТЧИК СООБЩЕНИЙ ==========
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1870,6 +1884,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
