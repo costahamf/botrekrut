@@ -457,13 +457,36 @@ def load_from_google_sheets():
         
         for i, record in enumerate(records):
             try:
+                # ========== ПОЛУЧАЕМ ДАННЫЕ ИЗ ТАБЛИЦЫ ==========
                 full_name = record.get('ФИО клиента') or ''
                 city = record.get('Город') or ''
                 status_text = record.get('СТАТУС') or ''
                 accepted = record.get('ПРИНЯТО') or '0'
                 rejected = record.get('ОТКЛОНЕНО') or '0'
                 
+                # ========== ЛОГИРОВАНИЕ БАЛАНСА ==========
+                balance_raw = record.get('Баланс', '0')
+                logger.info(f"📊 Строка {i+2}: {full_name}")
+                logger.info(f"   Баланс raw: '{balance_raw}'")
+                
+                # Преобразуем баланс в число
+                try:
+                    # Убираем пробелы, заменяем запятую на точку
+                    balance_str = str(balance_raw).strip().replace(' ', '').replace(',', '.')
+                    if balance_str and balance_str != '0':
+                        balance = float(balance_str)
+                        logger.info(f"   ✅ Баланс после преобразования: {balance}")
+                    else:
+                        balance = 0.0
+                        logger.info(f"   ℹ️ Баланс пустой или 0")
+                except Exception as e:
+                    balance = 0.0
+                    logger.warning(f"   ⚠️ Ошибка преобразования баланса '{balance_raw}': {e}")
+                # =============================================
+                
+                # Пропускаем пустые строки
                 if not full_name or not city:
+                    logger.warning(f"⚠️ Строка {i+2} пропущена: нет имени или города")
                     continue
                 
                 # Определяем статус
@@ -485,27 +508,54 @@ def load_from_google_sheets():
                     if user:
                         recruiter_id = user[0]
                         logger.info(f"   👤 Найден рекрутер @{recruiter_username} с ID {recruiter_id}")
+                    else:
+                        logger.warning(f"   ⚠️ Рекрутер @{recruiter_username} не найден в БД")
+                else:
+                    logger.warning(f"   ⚠️ В строке {i+2} нет username рекрутера")
                 # ============================================================
                 
-                # Вставляем или обновляем запись С recruiter_id
+                # Вставляем или обновляем запись С recruiter_id и балансом
                 if recruiter_id:
-                    c.execute('''
-                        INSERT OR REPLACE INTO couriers 
-                        (recruiter_id, full_name, city, status, registered_at, sheet_row) 
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (recruiter_id, full_name, city, status, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), i + 2))
-                    logger.info(f"✅ Загружен курьер {full_name} для рекрутера {recruiter_id}")
+                    # Проверяем, есть ли уже такой курьер
+                    c.execute('''SELECT id FROM couriers 
+                                 WHERE full_name = ? AND city = ?''', (full_name, city))
+                    existing = c.fetchone()
+                    
+                    if existing:
+                        # Обновляем существующего курьера
+                        c.execute('''
+                            UPDATE couriers 
+                            SET status = ?, balance = ?, sheet_row = ?, recruiter_id = ?
+                            WHERE id = ?
+                        ''', (status, balance, i + 2, recruiter_id, existing[0]))
+                        logger.info(f"🔄 Обновлен курьер {full_name}, баланс: {balance}")
+                    else:
+                        # Вставляем нового курьера
+                        c.execute('''
+                            INSERT INTO couriers 
+                            (recruiter_id, full_name, city, status, balance, registered_at, sheet_row) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ''', (recruiter_id, full_name, city, status, balance, 
+                              datetime.now().strftime("%Y-%m-%d %H:%M:%S"), i + 2))
+                        logger.info(f"✅ Добавлен новый курьер {full_name}, баланс: {balance}")
                 else:
-                    # Если рекрутер не найден, вставляем без привязки (или пропускаем)
-                    logger.warning(f"⚠️ Курьер {full_name} пропущен - рекрутер @{recruiter_username} не найден")
-                    # Можно вставить без привязки, но тогда он ничей
-                    # c.execute(...) без recruiter_id
+                    logger.warning(f"⚠️ Курьер {full_name} пропущен - рекрутер не найден")
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка при обработке строки {i+2}: {e}")
+                logger.error(f"   Данные строки: {record}")
                 continue
         
         conn.commit()
+        
+        # ========== ПРОВЕРЯЕМ, ЧТО ЗАГРУЗИЛОСЬ ==========
+        c.execute("SELECT COUNT(*) FROM couriers")
+        total = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM couriers WHERE balance > 0")
+        with_balance = c.fetchone()[0]
+        logger.info(f"📊 ИТОГ ЗАГРУЗКИ: всего {total} курьеров, из них {with_balance} с балансом > 0")
+        # ================================================
+        
         logger.info(f"✅ Загружено {len(records)} курьеров из Google Sheets")
         
     except Exception as e:
@@ -2377,6 +2427,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
