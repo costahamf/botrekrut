@@ -51,12 +51,10 @@ def get_db():
             DB_CONN = sqlite3.connect(':memory:', check_same_thread=False)
             init_database_tables(DB_CONN)
             load_backup()
-        # Проверяем, не закрыто ли соединение
-        DB_CONN.cursor().execute("SELECT 1").fetchone()
+        # Просто возвращаем соединение, не проверяем его
         return DB_CONN
-    except sqlite3.ProgrammingError:
-        # Если соединение закрыто, создаем новое
-        logger.warning("⚠️ Соединение с БД было закрыто, создаем новое")
+    except Exception as e:
+        logger.error(f"❌ Ошибка в get_db: {e}")
         DB_CONN = sqlite3.connect(':memory:', check_same_thread=False)
         init_database_tables(DB_CONN)
         load_backup()
@@ -156,12 +154,6 @@ def backup_database():
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения бэкапа: {e}")
         return False
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except:
-                pass
                 
 def load_backup():
     """Загружает данные из JSON файла"""
@@ -331,12 +323,6 @@ def is_registered(user_id):
     except Exception as e:
         logger.error(f"Ошибка в is_registered: {e}")
         return False
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except:
-                pass
                 
 def register_user(user_id, username, first_name, last_name):
     conn = None
@@ -350,12 +336,6 @@ def register_user(user_id, username, first_name, last_name):
         logger.info(f"✅ Пользователь {user_id} зарегистрирован")
     except Exception as e:
         logger.error(f"Ошибка в register_user: {e}")
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except:
-                pass
 
 # ========== СЮДА ВСТАВЬ НОВУЮ ФУНКЦИЮ ==========
 def update_test_status(user_id, passed):
@@ -403,12 +383,6 @@ def update_test_status(user_id, passed):
         logger.error(f"Ошибка в update_test_status: {e}")
         import traceback
         traceback.print_exc()
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except:
-                pass
 
 # ========== КОНЕЦ НОВОЙ ФУНКЦИИ ==========
 
@@ -443,12 +417,6 @@ def can_take_test(user_id):
     except Exception as e:
         logger.error(f"Ошибка в can_take_test: {e}")
         return True, 0
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except:
-                pass
 # ========== ТЕСТОВЫЕ ВОПРОСЫ ==========
 TEST_QUESTIONS = [
     {
@@ -670,12 +638,6 @@ def get_user_balance(user_id):
     except Exception as e:
         logger.error(f"Ошибка в get_user_balance: {e}")
         return 0
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except:
-                pass
 
 def create_withdrawal_request(user_id, amount, method, details):
     conn = get_db()
@@ -842,10 +804,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка при проверке test_passed в start: {e}")
         test_passed = 0
-    finally:
-        if conn:
-            conn.close()
-            logger.debug("🔒 Соединение с БД закрыто")
     
     if test_passed == 1:
         keyboard = [
@@ -901,10 +859,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка при проверке test_passed: {e}")
         test_passed = 0
-    finally:
-        if conn:
-            conn.close()
-    
     protected_sections = ['withdrawal', 'personal_account', 'my_couriers', 'add_courier', 'rates']
     if test_passed == 0 and data in protected_sections:
         keyboard = [[InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')]]
@@ -1263,12 +1217,6 @@ def get_recruiter_couriers(recruiter_id):
     except Exception as e:
         logger.error(f"Ошибка в get_recruiter_couriers: {e}")
         return []
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except:
-                pass
 async def show_my_couriers(query, user_id, context):
     couriers = get_recruiter_couriers(user_id)
     total_balance = get_user_balance(user_id)
@@ -1711,29 +1659,19 @@ async def show_info_section(query, context):
 # ========== НАВИГАЦИЯ ==========
 async def back_to_main(query, user_id, context):
     test_passed = 0
-    conn = None
     try:
-        conn = get_db()
-        if conn is None:
-            logger.error("❌ Не удалось получить соединение с БД в back_to_main")
-            test_passed = 0
-        else:
-            c = conn.cursor()
-            c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
-            result = c.fetchone()
-            test_passed = result[0] if result else 0
-            logger.info(f"📊 back_to_main: user_id={user_id}, test_passed={test_passed}")
+        conn = get_db()  # Получаем глобальное соединение
+        c = conn.cursor()
+        c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
+        result = c.fetchone()
+        test_passed = result[0] if result else 0
+        logger.info(f"📊 back_to_main: user_id={user_id}, test_passed={test_passed}")
     except Exception as e:
         logger.error(f"Ошибка при проверке test_passed в back_to_main: {e}")
-        test_passed = 0  # По умолчанию считаем что тест не пройден
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except:
-                pass
+        test_passed = 0
     
-    # ВАЖНО: даже если произошла ошибка, показываем меню
+    # НЕ закрываем соединение здесь!
+    
     if test_passed == 1:
         keyboard = [
             [InlineKeyboardButton("📋 Вся информация", callback_data='all_info')],
@@ -1751,21 +1689,12 @@ async def back_to_main(query, user_id, context):
         ]
         menu_text = "📚 *Для доступа к полному функционалу необходимо пройти тест*\n\nВыберите действие:"
     
-    try:
-        await edit_and_track(
-            query, context,
-            menu_text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
-    except Exception as e:
-        logger.error(f"Ошибка при показе меню: {e}")
-        # Если не получилось отредактировать, пробуем отправить новое сообщение
-        await query.message.reply_text(
-            menu_text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+    await edit_and_track(
+        query, context,
+        menu_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
 # ========== ОБРАБОТЧИК СООБЩЕНИЙ ==========
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1923,6 +1852,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
