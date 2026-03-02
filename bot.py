@@ -123,9 +123,18 @@ def backup_database():
         # ВАЖНО: создаем НОВОЕ соединение, а не используем глобальное
         conn = sqlite3.connect(':memory:')
         
-        # Копируем данные из глобальной БД
+        # Копируем данные из глобальной БД, если она существует и не закрыта
         if DB_CONN is not None:
-            DB_CONN.backup(conn)
+            try:
+                # Проверяем, открыто ли соединение
+                DB_CONN.cursor().execute("SELECT 1").fetchone()
+                DB_CONN.backup(conn)
+            except:
+                logger.warning("⚠️ Глобальное соединение с БД закрыто, создаем новую БД для бэкапа")
+                # Если не получается скопировать, создаем новую БД с таблицами
+                init_database_tables(conn)
+        else:
+            init_database_tables(conn)
         
         c = conn.cursor()
         
@@ -153,7 +162,7 @@ def backup_database():
                 conn.close()
             except:
                 pass
-
+                
 def load_backup():
     """Загружает данные из JSON файла"""
     try:
@@ -1914,6 +1923,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
