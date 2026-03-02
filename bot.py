@@ -1458,7 +1458,7 @@ def get_recruiter_couriers(recruiter_id):
             return []
             
         c = conn.cursor()
-        c.execute('''SELECT full_name, city, status, registered_at, confirmed_at 
+        c.execute('''SELECT full_name, city, status, registered_at, confirmed_at, balance 
                      FROM couriers 
                      WHERE recruiter_id = ? 
                      ORDER BY registered_at DESC''', (recruiter_id,))
@@ -1474,13 +1474,17 @@ async def show_my_couriers(query, user_id, context):
         text = f"📭 *У вас пока нет записанных курьеров*\n\n💰 *Общий баланс:* {total_balance} руб."
     else:
         text = f"👥 *Ваши курьеры:*\n\n💰 *Общий баланс:* {total_balance} руб.\n\n"
-        for full_name, city, status, reg_date, conf_date in couriers:
+        for full_name, city, status, reg_date, conf_date, balance in couriers:  # ← добавил balance
             date_obj = datetime.strptime(reg_date, "%Y-%m-%d %H:%M:%S")
             date_str = date_obj.strftime("%d.%m.%Y")
             
             if status == 'confirmed':
                 status_emoji = "✅"
-                conf_info = f" (подтвержден)"
+                conf_info = f" (подтвержден"
+                if conf_date:
+                    conf_date_obj = datetime.strptime(conf_date, "%Y-%m-%d %H:%M:%S")
+                    conf_info += f" {conf_date_obj.strftime('%d.%m.%Y')}"
+                conf_info += ")"
             elif status == 'rejected':
                 status_emoji = "❌"
                 conf_info = f" (отклонен)"
@@ -1488,8 +1492,11 @@ async def show_my_couriers(query, user_id, context):
                 status_emoji = "⏳"
                 conf_info = f" (ожидает проверки)"
             
+            # ========== ДОБАВЛЯЕМ БАЛАНС ==========
             text += f"{status_emoji} *{full_name}* — {city}\n"
-            text += f"   📅 {date_str}{conf_info}\n\n"
+            text += f"   📅 {date_str}{conf_info}\n"
+            text += f"   💰 Баланс: {balance} руб.\n\n"  # ← вот эта строка
+            # ======================================
     
     keyboard = [
         [InlineKeyboardButton("📝 Записать курьера", callback_data='add_courier')],
@@ -2227,6 +2234,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
