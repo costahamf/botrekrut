@@ -447,9 +447,12 @@ def update_test_status(user_id, passed):
         conn.close()
 
 def can_take_test(user_id):
-    conn = get_db()
-    c = conn.cursor()
+    conn = None
     try:
+        conn = get_db()
+        if conn is None:
+            return True, 0
+        c = conn.cursor()
         c.execute("SELECT test_passed, last_test_attempt FROM users WHERE user_id = ?", (user_id,))
         result = c.fetchone()
         
@@ -475,8 +478,8 @@ def can_take_test(user_id):
         logger.error(f"Ошибка в can_take_test: {e}")
         return True, 0
     finally:
-        conn.close()
-
+        if conn:
+            conn.close()
 # ========== ТЕСТОВЫЕ ВОПРОСЫ ==========
 TEST_QUESTIONS = [
     {
@@ -1721,11 +1724,23 @@ async def show_info_section(query, context):
 
 # ========== НАВИГАЦИЯ ==========
 async def back_to_main(query, user_id, context):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
-    result = c.fetchone()
-    test_passed = result[0] if result else 0
+    test_passed = 0
+    conn = None
+    try:
+        conn = get_db()
+        if conn is None:
+            logger.error("❌ Не удалось получить соединение с БД в back_to_main")
+            test_passed = 0
+        else:
+            c = conn.cursor()
+            c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
+            result = c.fetchone()
+            test_passed = result[0] if result else 0
+    except Exception as e:
+        logger.error(f"Ошибка при проверке test_passed в back_to_main: {e}")
+    finally:
+        if conn:
+            conn.close()
     
     if test_passed == 1:
         keyboard = [
@@ -1750,7 +1765,6 @@ async def back_to_main(query, user_id, context):
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
-
 # ========== ОБРАБОТЧИК СООБЩЕНИЙ ==========
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1908,6 +1922,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
