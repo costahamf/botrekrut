@@ -34,13 +34,26 @@ PERSONAL_ACCOUNT_URL = "https://partners-app.yandex.ru/team_ref/8647844ed8ee4d0e
 CALCULATOR_URL = "https://eda.yandex.ru/partner/perf/samara/?utm_medium=cpc&utm_source=yandex-hr&utm_campaign=%5BEDA%5DMX_Courier_RU-ALL-1M_Brand_search_NU%7C73792274&utm_term=49415175552%7C---autotargeting&utm_content=k50id%7C0100000049415175552_49415175552%7Ccid%7C73792274%7Cgid%7C5378729251%7Caid%7C15662855932%7Cadp%7Cno%7Cpos%7Cpremium1%7Csrc%7Csearch_none%7Cdvc%7Cdesktop%7Cmain&etext=2202.H1-umiWOxa1IhaqocPaUS69zT9wHAZdkgZEGqorPY5rJ_ebzkat1FDn2yZO3bEqDYssRPcp0IyJXzD9sTJXJ7293dG14ZXB1Z2VrdW1hemM.0d27564e0c3a01c61971ab0f3d5b481a3ae88ee1&yclid=14506292526793097215"
 
 # ========== ПОСТОЯННОЕ ХРАНЕНИЕ ДАННЫХ ==========
-def get_db():
-    """Создает новое соединение с БД"""
-    return sqlite3.connect('users.db', check_same_thread=False)
+import json
+import os
+import threading
+import atexit
+import time
 
-def init_database():
-    """Инициализирует БД в файле (данные сохраняются)"""
-    conn = get_db()
+DB_CONN = None
+BACKUP_FILE = 'backup.json'
+
+def get_db():
+    """Возвращает соединение с БД в памяти"""
+    global DB_CONN
+    if DB_CONN is None:
+        DB_CONN = sqlite3.connect(':memory:', check_same_thread=False)
+        init_database_tables(DB_CONN)
+        load_backup()
+    return DB_CONN
+
+def init_database_tables(conn):
+    """Создает таблицы в переданном соединении"""
     c = conn.cursor()
     
     # Таблица пользователей
@@ -63,7 +76,8 @@ def init_database():
                   payment_method TEXT,
                   payment_details TEXT,
                   status TEXT DEFAULT 'pending',
-                  request_date TEXT)''')
+                  request_date TEXT,
+                  completed_date TEXT)''')
     
     # Таблица тикетов поддержки
     c.execute('''CREATE TABLE IF NOT EXISTS support_tickets
@@ -77,7 +91,7 @@ def init_database():
                   answered_at TEXT,
                   admin_reply TEXT)''')
     
-    # Таблица курьеров (ОДНА, с балансом)
+    # Таблица курьеров
     c.execute('''CREATE TABLE IF NOT EXISTS couriers
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   recruiter_id INTEGER,
@@ -90,8 +104,89 @@ def init_database():
                   sheet_row INTEGER)''')
     
     conn.commit()
-    conn.close()
-    logger.info("✅ База данных инициализирована в файле users.db")
+    logger.info("✅ Таблицы созданы в памяти")
+
+def backup_database():
+    """Сохраняет все данные в JSON файл"""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Собираем все данные
+        backup = {
+            'users': c.execute("SELECT * FROM users").fetchall(),
+            'withdrawals': c.execute("SELECT * FROM withdrawals").fetchall(),
+            'support_tickets': c.execute("SELECT * FROM support_tickets").fetchall(),
+            'couriers': c.execute("SELECT * FROM couriers").fetchall(),
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Сохраняем в файл
+        with open(BACKUP_FILE, 'w', encoding='utf-8') as f:
+            json.dump(backup, f, default=str, ensure_ascii=False, indent=2)
+        
+        logger.info(f"💾 Автосохранение: {len(backup['users'])} users, {len(backup['couriers'])} couriers")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения бэкапа: {e}")
+        return False
+
+def load_backup():
+    """Загружает данные из JSON файла"""
+    try:
+        if not os.path.exists(BACKUP_FILE):
+            logger.info("📭 Файл бэкапа не найден, начинаем с пустой БД")
+            return
+        
+        with open(BACKUP_FILE, 'r', encoding='utf-8') as f:
+            backup = json.load(f)
+        
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Загружаем пользователей
+        for row in backup.get('users', []):
+            placeholders = ','.join(['?'] * len(row))
+            c.execute(f"INSERT OR REPLACE INTO users VALUES ({placeholders})", row)
+        
+        # Загружаем заявки на вывод
+        for row in backup.get('withdrawals', []):
+            placeholders = ','.join(['?'] * len(row))
+            c.execute(f"INSERT OR REPLACE INTO withdrawals VALUES ({placeholders})", row)
+        
+        # Загружаем тикеты
+        for row in backup.get('support_tickets', []):
+            placeholders = ','.join(['?'] * len(row))
+            c.execute(f"INSERT OR REPLACE INTO support_tickets VALUES ({placeholders})", row)
+        
+        # Загружаем курьеров
+        for row in backup.get('couriers', []):
+            placeholders = ','.join(['?'] * len(row))
+            c.execute(f"INSERT OR REPLACE INTO couriers VALUES ({placeholders})", row)
+        
+        conn.commit()
+        logger.info(f"✅ Загружено из бэкапа: {len(backup.get('users', []))} users, {len(backup.get('couriers', []))} couriers")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки бэкапа: {e}")
+
+def start_auto_backup():
+    """Запускает автосохранение каждые 5 минут"""
+    def backup_worker():
+        while True:
+            time.sleep(300)  # 5 минут
+            backup_database()
+    
+    thread = threading.Thread(target=backup_worker, daemon=True)
+    thread.start()
+    logger.info("✅ Автосохранение запущено (каждые 5 минут)")
+
+# Сохраняем при выходе
+atexit.register(backup_database)
+def init_database():
+    """Инициализирует БД"""
+    get_db()  # Просто вызываем для создания таблиц
+    logger.info("✅ База данных инициализирована")
     
 # ========== GOOGLE SHEETS ИНТЕГРАЦИЯ ==========
 def get_google_sheet():
@@ -1739,6 +1834,7 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== ЗАПУСК ==========
 def main():
+    start_auto_backup()  # Запускаем автосохранение
     init_database()
     start_sheet_monitoring()  # Запускаем мониторинг Google Sheets
     
@@ -1756,4 +1852,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
