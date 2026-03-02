@@ -382,7 +382,10 @@ def is_registered(user_id):
         return False
     finally:
         if conn:
-            conn.close()
+            try:
+                conn.close()
+            except:
+                pass
 
 def register_user(user_id, username, first_name, last_name):
     conn = None
@@ -396,11 +399,13 @@ def register_user(user_id, username, first_name, last_name):
         logger.info(f"✅ Пользователь {user_id} зарегистрирован")
     except Exception as e:
         logger.error(f"Ошибка в register_user: {e}")
-        if conn:
-            conn.rollback()
+        # Не вызываем rollback если conn уже закрыт
     finally:
         if conn:
-            conn.close()
+            try:
+                conn.close()
+            except:
+                pass
 def update_test_status(user_id, passed):
     conn = get_db()
     c = conn.cursor()
@@ -1867,6 +1872,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
