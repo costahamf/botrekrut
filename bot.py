@@ -653,12 +653,12 @@ def close_ticket(ticket_id, admin_reply):
         conn.close()
 
 # ========== ФУНКЦИИ ДЛЯ ВЫВОДА ==========
-def get_user_balance(user_id):
+ddef get_user_balance(user_id):
     """Получает баланс пользователя (сумму всех курьеров)"""
-    conn = get_db()
-    c = conn.cursor()
+    conn = None
     try:
-        # Получаем баланс из таблицы users (он обновляется в check_pending_couriers)
+        conn = get_db()
+        c = conn.cursor()
         c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
         result = c.fetchone()
         return result[0] if result else 0
@@ -666,7 +666,8 @@ def get_user_balance(user_id):
         logger.error(f"Ошибка в get_user_balance: {e}")
         return 0
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def create_withdrawal_request(user_id, amount, method, details):
     conn = get_db()
@@ -867,11 +868,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Проверка доступа для обычных пользователей
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
-    result = c.fetchone()
-    test_passed = result[0] if result else 0
+    conn = None
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
+        result = c.fetchone()
+        test_passed = result[0] if result else 0
+    except Exception as e:
+        logger.error(f"Ошибка при проверке test_passed: {e}")
+        test_passed = 0
+    finally:
+        if conn:
+            conn.close()
     
     protected_sections = ['withdrawal', 'personal_account', 'my_couriers', 'add_courier', 'rates']
     if test_passed == 0 and data in protected_sections:
@@ -1852,5 +1861,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
