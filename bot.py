@@ -1443,6 +1443,7 @@ async def finish_test(query, context):
             f"Правильных ответов: *{correct_count} из 10*\n\n"
             f"✅ Вам открыт полный доступ ко всем разделам!"
         )
+        # ← ВАЖНО: здесь должна быть кнопка "В главное меню", а не "Пройти тест"
         keyboard = [[InlineKeyboardButton("🏠 В главное меню", callback_data='back_to_main')]]
     elif correct_count < 3:
         update_test_status(user_id, False)
@@ -1451,6 +1452,7 @@ async def finish_test(query, context):
             f"Правильных ответов: *{correct_count} из 10*\n\n"
             f"⏳ Следующая попытка будет доступна через *30 минут*."
         )
+        # ← ВАЖНО: здесь должна быть кнопка "В главное меню"
         keyboard = [[InlineKeyboardButton("🏠 В главное меню", callback_data='back_to_main')]]
     else:
         update_test_status(user_id, False)
@@ -1459,6 +1461,7 @@ async def finish_test(query, context):
             f"Правильных ответов: *{correct_count} из 10*\n\n"
             f"📝 Вы можете попробовать снова прямо сейчас."
         )
+        # ← А вот здесь можно оставить кнопку "Пройти тест заново"
         keyboard = [[InlineKeyboardButton("📝 Пройти тест заново", callback_data='take_test')]]
     
     context.user_data.pop('test_answers', None)
@@ -1835,6 +1838,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
