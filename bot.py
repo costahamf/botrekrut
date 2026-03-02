@@ -255,15 +255,10 @@ def check_pending_couriers():
     try:
         sheet = get_google_sheet()
         if not sheet:
-            logger.error("❌ Нет доступа к Google Sheets")
             return
         
         records = sheet.get_all_records()
         logger.info(f"🔍 Найдено записей в таблице: {len(records)}")
-        
-        # Собираем балансы для обновления
-        recruiter_balances = {}
-        courier_updates = []
         
         for idx, record in enumerate(records, start=2):
             try:
@@ -273,6 +268,7 @@ def check_pending_couriers():
                 if not full_name or not city:
                     continue
                 
+                # Получаем значения из таблицы
                 принято = record.get('ПРИНЯТО', 0)
                 отклонено = record.get('ОТКЛОНЕНО', 0)
                 courier_balance = record.get('Баланс', 0)
@@ -282,79 +278,81 @@ def check_pending_couriers():
                 except:
                     courier_balance = 0
                 
-                # Получаем данные курьера из БД (отдельное соединение)
-                conn_courier = None
+                # Ищем курьера в БД (каждое подключение отдельно)
+                conn = None
                 try:
-                    conn_courier = get_db()
-                    c_courier = conn_courier.cursor()
-                    c_courier.execute('''SELECT id, recruiter_id, status FROM couriers 
-                                         WHERE full_name = ? AND city = ? 
-                                         ORDER BY id DESC LIMIT 1''', (full_name, city))
-                    courier = c_courier.fetchone()
+                    conn = get_db()
+                    c = conn.cursor()
+                    
+                    # Проверяем существование курьера
+                    c.execute('''SELECT id, recruiter_id, status FROM couriers 
+                                 WHERE full_name = ? AND city = ? 
+                                 ORDER BY id DESC LIMIT 1''', (full_name, city))
+                    courier = c.fetchone()
                     
                     if courier:
                         courier_id, recruiter_id, status = courier
                         
-                        # Обновляем баланс курьера
-                        conn_balance = None
-                        try:
-                            conn_balance = get_db()
-                            c_balance = conn_balance.cursor()
-                            c_balance.execute('''UPDATE couriers SET balance = ? WHERE id = ?''', 
-                                              (courier_balance, courier_id))
-                            conn_balance.commit()
-                        finally:
-                            if conn_balance:
-                                conn_balance.close()
+                        # Обновляем баланс
+                        c.execute('''UPDATE couriers SET balance = ? WHERE id = ?''', 
+                                  (courier_balance, courier_id))
                         
-                        # Добавляем в общую сумму рекрутера
-                        if recruiter_id not in recruiter_balances:
-                            recruiter_balances[recruiter_id] = 0
-                        recruiter_balances[recruiter_id] += courier_balance
-                        
-                        # Обработка статуса
+                        # Обновляем статус если нужно
                         if принято == 1 and отклонено == 0 and status == 'pending':
-                            conn_status = None
-                            try:
-                                conn_status = get_db()
-                                c_status = conn_status.cursor()
-                                c_status.execute('''UPDATE couriers 
-                                                     SET status = 'confirmed', confirmed_at = ? 
-                                                     WHERE id = ?''', 
-                                                  (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), courier_id))
-                                conn_status.commit()
-                                sheet.update_cell(idx, 6, "✅ Подтвержден")
-                                sheet.update_cell(idx, 8, 0)
-                                sheet.update_cell(idx, 9, 0)
-                                logger.info(f"✅ Курьер {full_name} подтвержден")
-                            finally:
-                                if conn_status:
-                                    conn_status.close()
-                                
+                            c.execute('''UPDATE couriers 
+                                         SET status = 'confirmed', confirmed_at = ? 
+                                         WHERE id = ?''', 
+                                      (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), courier_id))
+                            sheet.update_cell(idx, 6, "✅ Подтвержден")
+                            sheet.update_cell(idx, 8, 0)
+                            sheet.update_cell(idx, 9, 0)
+                            logger.info(f"✅ Курьер {full_name} подтвержден")
+                            
                         elif отклонено == 1 and принято == 0 and status == 'pending':
-                            conn_status = None
-                            try:
-                                conn_status = get_db()
-                                c_status = conn_status.cursor()
-                                c_status.execute('''UPDATE couriers 
-                                                     SET status = 'rejected' 
-                                                     WHERE id = ?''', (courier_id,))
-                                conn_status.commit()
-                                sheet.update_cell(idx, 6, "❌ Отклонен")
-                                sheet.update_cell(idx, 8, 0)
-                                sheet.update_cell(idx, 9, 0)
-                                logger.info(f"❌ Курьер {full_name} отклонен")
-                            finally:
-                                if conn_status:
-                                    conn_status.close()
-                    
-                finally:
-                    if conn_courier:
-                        conn_courier.close()
+                            c.execute('''UPDATE couriers 
+                                         SET status = 'rejected' 
+                                         WHERE id = ?''', (courier_id,))
+                            sheet.update_cell(idx, 6, "❌ Отклонен")
+                            sheet.update_cell(idx, 8, 0)
+                            sheet.update_cell(idx, 9, 0)
+                            logger.info(f"❌ Курьер {full_name} отклонен")
                         
+                        conn.commit()
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка БД для строки {idx}: {e}")
+                finally:
+                    if conn:
+                        conn.close()
+                
+                # Обновляем баланс рекрутера
+                if courier and 'recruiter_id' in locals():
+                    conn_balance = None
+                    try:
+                        conn_balance = get_db()
+                        c_balance = conn_balance.cursor()
+                        
+                        # Считаем общий баланс рекрутера
+                        c_balance.execute('''SELECT SUM(balance) FROM couriers 
+                                             WHERE recruiter_id = ?''', (recruiter_id,))
+                        total = c_balance.fetchone()[0] or 0
+                        
+                        c_balance.execute('''UPDATE users SET balance = ? WHERE user_id = ?''', 
+                                          (total, recruiter_id))
+                        conn_balance.commit()
+                        
+                    except Exception as e:
+                        logger.error(f"Ошибка обновления баланса рекрутера {recruiter_id}: {e}")
+                    finally:
+                        if conn_balance:
+                            conn_balance.close()
+                
             except Exception as e:
-                logger.error(f"Ошибка при обработке строки {idx}: {e}")
+                logger.error(f"Ошибка обработки строки {idx}: {e}")
                 continue
+                
+    except Exception as e:
+        logger.error(f"❌ Ошибка проверки статусов: {e}")
         
         # Обновляем балансы рекрутеров
         if recruiter_balances:
@@ -1910,6 +1908,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
