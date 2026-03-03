@@ -76,7 +76,8 @@ def init_database():
                   payment_details TEXT,
                   status TEXT DEFAULT 'pending',
                   request_date TEXT,
-                  completed_date TEXT)''')
+                  completed_date TEXT,
+                  reject_reason TEXT)''')
     
     # Таблица тикетов поддержки
     c.execute('''CREATE TABLE IF NOT EXISTS support_tickets
@@ -279,6 +280,40 @@ def add_withdrawal_to_sheet(user_id, username, first_name, amount, method, detai
         
     except Exception as e:
         logger.error(f"❌ Ошибка добавления заявки в Google Sheets: {e}")
+        return False
+
+def update_withdrawal_status_in_sheet(request_id, user_id, amount, status_text, completed_date=None):
+    """Обновляет статус заявки в Google Sheets"""
+    try:
+        withdrawals_sheet = get_withdrawals_sheet()
+        if not withdrawals_sheet:
+            return False
+        
+        # Получаем все записи
+        records = withdrawals_sheet.get_all_records()
+        
+        # Ищем запись с соответствующим user_id и суммой (приблизительный поиск)
+        for i, record in enumerate(records):
+            if str(record.get('User ID', '')) == str(user_id) and str(record.get('Сумма', '')) == str(amount) and record.get('Статус') == "⏳ Ожидает":
+                row_number = i + 2  # +2 потому что первая строка - заголовки
+                
+                # Обновляем статус (колонка H)
+                withdrawals_sheet.update_cell(row_number, 8, status_text)
+                
+                # Обновляем дату подтверждения (колонка I)
+                if completed_date:
+                    withdrawals_sheet.update_cell(row_number, 9, completed_date)
+                elif status_text == "❌ Отклонен":
+                    withdrawals_sheet.update_cell(row_number, 9, datetime.now().strftime("%d.%m.%Y %H:%M"))
+                
+                logger.info(f"✅ Обновлен статус заявки #{request_id} в Google Sheets: {status_text}")
+                return True
+        
+        logger.warning(f"⚠️ Запись для заявки #{request_id} не найдена в Google Sheets")
+        return False
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка обновления статуса в Google Sheets: {e}")
         return False
 
 def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, city):
@@ -759,7 +794,6 @@ TEST_QUESTIONS = [
 async def delete_previous_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Удаляет предыдущее сообщение бота и сообщение пользователя"""
     try:
-        # Удаляем предыдущее сообщение бота
         if 'last_bot_message_id' in context.user_data and 'last_chat_id' in context.user_data:
             try:
                 await context.bot.delete_message(
@@ -769,7 +803,6 @@ async def delete_previous_messages(update: Update, context: ContextTypes.DEFAULT
             except Exception as e:
                 logger.debug(f"Не удалось удалить сообщение бота: {e}")
         
-        # Удаляем сообщение пользователя (если это текст)
         if update.message:
             try:
                 await context.bot.delete_message(
@@ -779,7 +812,6 @@ async def delete_previous_messages(update: Update, context: ContextTypes.DEFAULT
             except Exception as e:
                 logger.debug(f"Не удалось удалить сообщение пользователя: {e}")
         
-        # Удаляем сообщение с callback кнопкой (если это callback)
         if update.callback_query and update.callback_query.message:
             try:
                 await context.bot.delete_message(
@@ -856,6 +888,20 @@ def get_open_tickets():
         logger.error(f"Ошибка в get_open_tickets: {e}")
         return []
 
+def get_all_tickets(limit=50):
+    """Получает все тикеты поддержки"""
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute('''SELECT ticket_id, user_id, username, first_name, message, status, created_at, answered_at, admin_reply
+                     FROM support_tickets 
+                     ORDER BY created_at DESC
+                     LIMIT ?''', (limit,))
+        return c.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка в get_all_tickets: {e}")
+        return []
+
 def get_ticket(ticket_id):
     conn = get_db()
     c = conn.cursor()
@@ -876,8 +922,10 @@ def close_ticket(ticket_id, admin_reply):
                      WHERE ticket_id = ?''',
                   (answered_at, admin_reply, ticket_id))
         conn.commit()
+        return True
     except Exception as e:
         logger.error(f"Ошибка в close_ticket: {e}")
+        return False
 
 # ========== ФУНКЦИИ ДЛЯ ВЫВОДА ==========
 def get_user_balance(user_id):
@@ -940,7 +988,38 @@ def get_pending_withdrawals():
         logger.error(f"Ошибка в get_pending_withdrawals: {e}")
         return []
 
-def confirm_withdrawal(request_id):
+def get_all_withdrawals(limit=50):
+    """Получает все заявки на вывод"""
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute('''SELECT w.id, w.user_id, u.first_name, u.username, 
+                            w.amount, w.payment_method, w.payment_details, w.status, w.request_date, w.completed_date, w.reject_reason
+                     FROM withdrawals w
+                     JOIN users u ON w.user_id = u.user_id
+                     ORDER BY w.request_date DESC
+                     LIMIT ?''', (limit,))
+        return c.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка в get_all_withdrawals: {e}")
+        return []
+
+def get_withdrawal_by_id(request_id):
+    """Получает заявку по ID"""
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute('''SELECT w.id, w.user_id, u.first_name, u.username, 
+                            w.amount, w.payment_method, w.payment_details, w.status, w.request_date
+                     FROM withdrawals w
+                     JOIN users u ON w.user_id = u.user_id
+                     WHERE w.id = ?''', (request_id,))
+        return c.fetchone()
+    except Exception as e:
+        logger.error(f"Ошибка в get_withdrawal_by_id: {e}")
+        return None
+
+async def confirm_withdrawal(request_id, context):
     """Подтверждает вывод средств и списывает баланс"""
     try:
         conn = get_db()
@@ -951,7 +1030,7 @@ def confirm_withdrawal(request_id):
         
         if not withdrawal:
             logger.error(f"❌ Заявка {request_id} не найдена")
-            return False
+            return False, None, None
         
         user_id, amount = withdrawal
         
@@ -960,7 +1039,7 @@ def confirm_withdrawal(request_id):
         
         if current_balance < amount:
             logger.error(f"❌ Недостаточно средств: баланс {current_balance}, запрос {amount}")
-            return False
+            return False, user_id, amount
         
         new_balance = current_balance - amount
         c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, user_id))
@@ -972,11 +1051,61 @@ def confirm_withdrawal(request_id):
         conn.commit()
         logger.info(f"✅ Подтвержден вывод {amount} для пользователя {user_id}. Новый баланс: {new_balance}")
         
-        return True
+        # Обновляем статус в Google Sheets
+        def update_sheet_thread():
+            try:
+                update_withdrawal_status_in_sheet(request_id, user_id, amount, "✅ Подтвержден", 
+                                                 datetime.now().strftime("%d.%m.%Y %H:%M"))
+            except Exception as e:
+                logger.error(f"Ошибка обновления статуса в Google Sheets: {e}")
+        
+        thread = threading.Thread(target=update_sheet_thread)
+        thread.start()
+        
+        return True, user_id, amount
         
     except Exception as e:
         logger.error(f"Ошибка в confirm_withdrawal: {e}")
-        return False
+        return False, None, None
+
+async def reject_withdrawal(request_id, reason, context):
+    """Отклоняет вывод средств"""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        c.execute('''SELECT user_id, amount FROM withdrawals WHERE id = ?''', (request_id,))
+        withdrawal = c.fetchone()
+        
+        if not withdrawal:
+            logger.error(f"❌ Заявка {request_id} не найдена")
+            return False, None, None
+        
+        user_id, amount = withdrawal
+        
+        completed_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("UPDATE withdrawals SET status = 'rejected', completed_date = ?, reject_reason = ? WHERE id = ?", 
+                  (completed_date, reason, request_id))
+        
+        conn.commit()
+        logger.info(f"❌ Отклонен вывод {amount} для пользователя {user_id}. Причина: {reason}")
+        
+        # Обновляем статус в Google Sheets
+        def update_sheet_thread():
+            try:
+                update_withdrawal_status_in_sheet(request_id, user_id, amount, "❌ Отклонен", 
+                                                 datetime.now().strftime("%d.%m.%Y %H:%M"))
+            except Exception as e:
+                logger.error(f"Ошибка обновления статуса в Google Sheets: {e}")
+        
+        thread = threading.Thread(target=update_sheet_thread)
+        thread.start()
+        
+        return True, user_id, amount
+        
+    except Exception as e:
+        logger.error(f"Ошибка в reject_withdrawal: {e}")
+        return False, None, None
 
 # ========== ФУНКЦИИ ДЛЯ КУРЬЕРОВ ==========
 def add_courier(recruiter_id, recruiter_username, recruiter_name, full_name, city):
@@ -1123,6 +1252,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith('withdrawal_confirm_'):
         await admin_withdrawal_confirm(update, context)
         return
+    elif data.startswith('withdrawal_reject_'):
+        await admin_withdrawal_reject_start(update, context)
+        return
     
     # Проверка доступа для обычных пользователей
     conn = get_db()
@@ -1237,7 +1369,15 @@ async def handle_withdrawal_input(update: Update, context: ContextTypes.DEFAULT_
     text = update.message.text
     
     try:
-        amount, details = text.split('|')
+        if '|' not in text:
+            await send_and_track(
+                update, context,
+                "❌ Неверный формат. Используйте: Сумма|Реквизиты\n"
+                "Пример: 500|1234567890123456"
+            )
+            return
+        
+        amount, details = text.split('|', 1)
         amount = float(amount.strip())
         details = details.strip()
         method = context.user_data.get('withdrawal_method', 'unknown')
@@ -1270,7 +1410,10 @@ async def handle_withdrawal_input(update: Update, context: ContextTypes.DEFAULT_
         )
         
         keyboard = [
-            [InlineKeyboardButton("✅ Подтвердить", callback_data=f'withdrawal_confirm_{request_id}')]
+            [
+                InlineKeyboardButton("✅ Подтвердить", callback_data=f'withdrawal_confirm_{request_id}'),
+                InlineKeyboardButton("❌ Отказать", callback_data=f'withdrawal_reject_{request_id}')
+            ]
         ]
         
         admin_message = (
@@ -1293,8 +1436,7 @@ async def handle_withdrawal_input(update: Update, context: ContextTypes.DEFAULT_
     except ValueError:
         await send_and_track(
             update, context,
-            "❌ Неверный формат. Используйте: Сумма|Реквизиты\n"
-            "Пример: 500|1234567890123456"
+            "❌ Неверный формат суммы. Введите число."
         )
     except Exception as e:
         await send_and_track(
@@ -1313,12 +1455,81 @@ async def admin_withdrawal_confirm(update: Update, context: ContextTypes.DEFAULT
         return
     
     request_id = int(query.data.replace('withdrawal_confirm_', ''))
-    success = confirm_withdrawal(request_id)
+    success, user_id, amount = await confirm_withdrawal(request_id, context)
     
     if success:
         await query.edit_message_text(f"✅ Заявка {request_id} подтверждена")
+        
+        # Отправляем уведомление пользователю
+        try:
+            user_message = (
+                f"✅ *Заявка на вывод подтверждена!*\n\n"
+                f"🆔 Номер заявки: `{request_id}`\n"
+                f"💰 Сумма: {amount} руб.\n\n"
+                f"Средства будут переведены в ближайшее время."
+            )
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=user_message,
+                parse_mode='Markdown'
+            )
+            logger.info(f"📨 Уведомление о подтверждении отправлено пользователю {user_id}")
+        except Exception as e:
+            logger.error(f"❌ Не удалось отправить уведомление пользователю {user_id}: {e}")
     else:
         await query.edit_message_text(f"❌ Ошибка при подтверждении заявки {request_id}")
+
+async def admin_withdrawal_reject_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ У вас нет прав администратора")
+        return
+    
+    request_id = int(query.data.replace('withdrawal_reject_', ''))
+    context.user_data['rejecting_withdrawal'] = request_id
+    
+    await query.edit_message_text(
+        f"📝 Введите причину отказа для заявки #{request_id}:",
+        parse_mode='Markdown'
+    )
+
+async def handle_withdrawal_reject_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    request_id = context.user_data.get('rejecting_withdrawal')
+    if not request_id:
+        return
+    
+    reason = update.message.text
+    success, user_id, amount = await reject_withdrawal(request_id, reason, context)
+    
+    if success:
+        await update.message.reply_text(f"✅ Заявка {request_id} отклонена")
+        
+        # Отправляем уведомление пользователю
+        try:
+            user_message = (
+                f"❌ *Заявка на вывод отклонена*\n\n"
+                f"🆔 Номер заявки: `{request_id}`\n"
+                f"💰 Сумма: {amount} руб.\n"
+                f"📝 Причина: {reason}\n\n"
+                f"Средства не были списаны с вашего баланса."
+            )
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=user_message,
+                parse_mode='Markdown'
+            )
+            logger.info(f"📨 Уведомление об отказе отправлено пользователю {user_id}")
+        except Exception as e:
+            logger.error(f"❌ Не удалось отправить уведомление пользователю {user_id}: {e}")
+    else:
+        await update.message.reply_text(f"❌ Ошибка при отклонении заявки {request_id}")
+    
+    context.user_data['rejecting_withdrawal'] = None
 
 # ========== ПОДДЕРЖКА ==========
 async def support_start(query, user_id, context):
@@ -1410,15 +1621,15 @@ async def admin_close_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     ticket = get_ticket(ticket_id)
     
     if ticket:
-        close_ticket(ticket_id, "Тикет закрыт администратором")
-        
-        await context.bot.send_message(
-            chat_id=ticket[1],
-            text=f"🆘 *Обращение #{ticket_id} закрыто*\n\nВаш тикет был закрыт администратором.",
-            parse_mode='Markdown'
-        )
-        
-        await query.edit_message_text(f"✅ Тикет {ticket_id} закрыт")
+        if close_ticket(ticket_id, "Тикет закрыт администратором"):
+            await context.bot.send_message(
+                chat_id=ticket[1],
+                text=f"🆘 *Обращение #{ticket_id} закрыто*\n\nВаш тикет был закрыт администратором.",
+                parse_mode='Markdown'
+            )
+            await query.edit_message_text(f"✅ Тикет {ticket_id} закрыт")
+        else:
+            await query.edit_message_text(f"❌ Ошибка при закрытии тикета {ticket_id}")
     else:
         await query.edit_message_text("❌ Тикет не найден")
 
@@ -1434,22 +1645,23 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ticket = get_ticket(ticket_id)
     
     if ticket:
-        close_ticket(ticket_id, reply_text)
-        
-        user_message = (
-            f"🆘 *Ответ на обращение #{ticket_id}*\n\n"
-            f"📝 *Ваш вопрос:*\n{ticket[4]}\n\n"
-            f"💬 *Ответ администратора:*\n{reply_text}\n\n"
-            f"⏱ Время ответа: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-        )
-        
-        await context.bot.send_message(
-            chat_id=ticket[1],
-            text=user_message,
-            parse_mode='Markdown'
-        )
-        
-        await update.message.reply_text(f"✅ Ответ на тикет {ticket_id} отправлен пользователю")
+        if close_ticket(ticket_id, reply_text):
+            user_message = (
+                f"🆘 *Ответ на обращение #{ticket_id}*\n\n"
+                f"📝 *Ваш вопрос:*\n{ticket[4]}\n\n"
+                f"💬 *Ответ администратора:*\n{reply_text}\n\n"
+                f"⏱ Время ответа: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+            )
+            
+            await context.bot.send_message(
+                chat_id=ticket[1],
+                text=user_message,
+                parse_mode='Markdown'
+            )
+            
+            await update.message.reply_text(f"✅ Ответ на тикет {ticket_id} отправлен пользователю")
+        else:
+            await update.message.reply_text(f"❌ Ошибка при ответе на тикет {ticket_id}")
     else:
         await update.message.reply_text("❌ Тикет не найден")
     
@@ -1993,6 +2205,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_withdrawal_input(update, context)
         return
     
+    if context.user_data.get('rejecting_withdrawal'):
+        await handle_withdrawal_reject_reason(update, context)
+        return
+    
     await send_and_track(
         update, context,
         "Используйте команду /start для навигации"
@@ -2013,6 +2229,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔹 `/checkdb` - проверить состояние БД\n"
         "🔹 `/couriers` - список всех курьеров\n"
         "🔹 `/withdrawals` - список заявок на вывод\n"
+        "🔹 `/tickets` - список тикетов поддержки\n"
         "🔹 `/fixmy` - исправить курьеров без рекрутера\n"
         "🔹 `/fixusers` - исправить данные пользователей\n"
         "🔹 `/testgoogle` - тест подключения к Google Sheets\n"
@@ -2024,42 +2241,8 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode='Markdown')
 
 async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ У вас нет прав администратора")
-        return
-    
-    tickets = get_open_tickets()
-    withdrawals = get_pending_withdrawals()
-    
-    if not tickets and not withdrawals:
-        await update.message.reply_text("📭 Нет активных обращений")
-        return
-    
-    text = ""
-    
-    if tickets:
-        text += "🆘 АКТИВНЫЕ ОБРАЩЕНИЯ В ПОДДЕРЖКУ:\n\n"
-        for ticket in tickets:
-            text += f"🆔 {ticket[0]}\n"
-            text += f"👤 {ticket[3]} (@{ticket[2]})\n"
-            text += f"📝 {ticket[4][:100]}...\n"
-            text += f"📅 {ticket[5]}\n"
-            text += "──────────────────────\n"
-    
-    if withdrawals:
-        if tickets:
-            text += "\n"
-        text += "💰 ОЖИДАЮЩИЕ ЗАЯВКИ НА ВЫВОД:\n\n"
-        for w in withdrawals:
-            text += f"🆔 {w[0]}\n"
-            text += f"👤 {w[2]} (@{w[3]})\n"
-            text += f"💰 {w[4]} руб.\n"
-            text += f"💳 {w[5]}\n"
-            text += f"📝 {w[6]}\n"
-            text += f"📅 {w[7]}\n"
-            text += "──────────────────────\n"
-    
-    await update.message.reply_text(text)
+    """Старая команда для обратной совместимости"""
+    await admin_panel(update, context)
 
 async def admin_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Принудительная синхронизация статусов с Google Sheets"""
@@ -2110,6 +2293,14 @@ async def admin_check_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
             users_count = c.fetchone()[0]
             text += f"👤 Пользователей в БД: {users_count}\n"
             
+            c.execute("SELECT COUNT(*) FROM withdrawals WHERE status='pending'")
+            pending_withdrawals = c.fetchone()[0]
+            text += f"💰 Ожидающих заявок на вывод: {pending_withdrawals}\n"
+            
+            c.execute("SELECT COUNT(*) FROM support_tickets WHERE status='open'")
+            open_tickets = c.fetchone()[0]
+            text += f"🆘 Открытых тикетов: {open_tickets}\n"
+            
             if couriers_count > 0:
                 c.execute("SELECT full_name, city, status FROM couriers LIMIT 5")
                 couriers = c.fetchall()
@@ -2139,6 +2330,7 @@ async def admin_check_couriers(update: Update, context: ContextTypes.DEFAULT_TYP
             FROM couriers c
             LEFT JOIN users u ON c.recruiter_id = u.user_id
             ORDER BY c.id DESC
+            LIMIT 30
         ''')
         couriers = c.fetchall()
         
@@ -2172,31 +2364,67 @@ async def admin_withdrawals(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ У вас нет прав администратора")
         return
     
-    conn = get_db()
-    c = conn.cursor()
-    c.execute('''SELECT w.id, w.user_id, u.username, u.first_name, 
-                        w.amount, w.payment_method, w.payment_details, w.status, w.request_date
-                 FROM withdrawals w
-                 JOIN users u ON w.user_id = u.user_id
-                 ORDER BY w.request_date DESC
-                 LIMIT 20''')
-    withdrawals = c.fetchall()
+    withdrawals = get_all_withdrawals(30)
     
     if not withdrawals:
         await update.message.reply_text("📭 Нет заявок на вывод")
         return
     
-    text = "💰 *Последние заявки на вывод:*\n\n"
+    text = "💰 *ВСЕ ЗАЯВКИ НА ВЫВОД:*\n\n"
     for w in withdrawals:
-        status_emoji = "✅" if w[7] == 'completed' else "⏳" if w[7] == 'pending' else "❌"
-        text += f"{status_emoji} *Заявка #{w[0]}*\n"
-        text += f"👤 {w[3]} (@{w[2]})\n"
-        text += f"💰 {w[4]} руб.\n"
-        text += f"💳 {w[5]}: {w[6]}\n"
-        text += f"📅 {w[8]}\n"
+        id, user_id, first_name, username, amount, method, details, status, request_date, completed_date, reject_reason = w
+        status_emoji = "✅" if status == 'completed' else "❌" if status == 'rejected' else "⏳"
+        status_text = f"{status_emoji} *Заявка #{id}*\n"
+        text += status_text
+        text += f"👤 {first_name} (@{username})\n"
+        text += f"💰 {amount} руб.\n"
+        text += f"💳 {method}: {details}\n"
+        text += f"📅 Создана: {request_date}\n"
+        if status == 'completed':
+            text += f"✅ Подтверждена: {completed_date}\n"
+        elif status == 'rejected':
+            text += f"❌ Отклонена: {completed_date}\n"
+            text += f"📝 Причина: {reject_reason}\n"
         text += "──────────────────────\n"
     
-    await update.message.reply_text(text, parse_mode='Markdown')
+    if len(text) > 4000:
+        for i in range(0, len(text), 4000):
+            await update.message.reply_text(text[i:i+4000], parse_mode='Markdown')
+    else:
+        await update.message.reply_text(text, parse_mode='Markdown')
+
+async def admin_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Просмотр всех тикетов поддержки"""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ У вас нет прав администратора")
+        return
+    
+    tickets = get_all_tickets(30)
+    
+    if not tickets:
+        await update.message.reply_text("📭 Нет тикетов поддержки")
+        return
+    
+    text = "🆘 *ВСЕ ТИКЕТЫ ПОДДЕРЖКИ:*\n\n"
+    for ticket in tickets:
+        ticket_id, user_id, username, first_name, message, status, created_at, answered_at, admin_reply = ticket
+        status_emoji = "✅" if status == 'closed' else "⏳"
+        status_text = f"{status_emoji} *Тикет #{ticket_id}*\n"
+        text += status_text
+        text += f"👤 {first_name} (@{username})\n"
+        text += f"📝 {message[:100]}...\n"
+        text += f"📅 Создан: {created_at}\n"
+        if status == 'closed':
+            text += f"✅ Закрыт: {answered_at}\n"
+            if admin_reply:
+                text += f"💬 Ответ: {admin_reply[:50]}...\n"
+        text += "──────────────────────\n"
+    
+    if len(text) > 4000:
+        for i in range(0, len(text), 4000):
+            await update.message.reply_text(text[i:i+4000], parse_mode='Markdown')
+    else:
+        await update.message.reply_text(text, parse_mode='Markdown')
 
 async def admin_fix_my_couriers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Исправляет только курьеров, созданных через бота"""
@@ -2289,6 +2517,13 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sheet = client.open_by_key(sheet_id).sheet1
         await update.message.reply_text("✅ Таблица открыта успешно")
         
+        # Проверяем лист "Выводы"
+        withdrawals_sheet = get_withdrawals_sheet()
+        if withdrawals_sheet:
+            await update.message.reply_text("✅ Лист 'Выводы' доступен")
+        else:
+            await update.message.reply_text("⚠️ Проблема с листом 'Выводы'")
+        
         test_row = [
             datetime.now().strftime("%d.%m.%Y %H:%M"),
             "ТЕСТ",
@@ -2379,6 +2614,7 @@ def main():
     application.add_handler(CommandHandler("checkdb", admin_check_db))
     application.add_handler(CommandHandler("couriers", admin_check_couriers))
     application.add_handler(CommandHandler("withdrawals", admin_withdrawals))
+    application.add_handler(CommandHandler("tickets", admin_tickets))
     application.add_handler(CommandHandler("fixmy", admin_fix_my_couriers))
     application.add_handler(CommandHandler("fixusers", admin_fix_users))
     application.add_handler(CommandHandler("testgoogle", test_google))
