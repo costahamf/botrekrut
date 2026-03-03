@@ -650,7 +650,6 @@ def update_test_status(user_id, passed):
         logger.error(f"Ошибка в update_test_status: {e}")
         import traceback
         traceback.print_exc()
-    # НЕТ finally с conn.close()!
 
 # ========== КОНЕЦ НОВОЙ ФУНКЦИИ ==========
 
@@ -848,8 +847,6 @@ def create_support_ticket(user_id, username, first_name, message):
     except Exception as e:
         logger.error(f"Ошибка в create_support_ticket: {e}")
         return None
-    finally:
-        conn.close()
 
 def get_open_tickets():
     conn = get_db()
@@ -1071,7 +1068,6 @@ def add_courier(recruiter_id, recruiter_username, recruiter_name, full_name, cit
         import traceback
         traceback.print_exc()
         return False, f"Ошибка: {str(e)}"
-    # НЕТ finally с conn.close()!
 # ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await delete_previous_message(update, context)
@@ -2427,6 +2423,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
