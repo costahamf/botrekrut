@@ -2010,12 +2010,21 @@ async def start_test(query, user_id, context):
     
     if not can_take:
         logger.info(f"⏳ Тест недоступен для {user_id}, осталось {minutes_left} минут")
-        await edit_and_track(
-            query, context,
-            f"⏳ *Тест временно недоступен*\n\n"
-            f"Вы уже проходили тест недавно. Следующая попытка будет доступна через *{minutes_left} минут*.",
-            parse_mode='Markdown'
-        )
+        text = f"⏳ *Тест временно недоступен*\n\nВы уже проходили тест недавно. Следующая попытка будет доступна через *{minutes_left} минут*."
+        
+        if query.message.photo:
+            await query.message.delete()
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=text,
+                parse_mode='Markdown'
+            )
+        else:
+            await edit_and_track(
+                query, context,
+                text,
+                parse_mode='Markdown'
+            )
         return
     
     shuffled = random.sample(TEST_QUESTIONS, len(TEST_QUESTIONS))
@@ -2047,13 +2056,26 @@ async def show_test_question(query, context):
         
         keyboard.append([InlineKeyboardButton("❌ Отменить тест", callback_data='back_to_main')])
         
-        await edit_and_track(
-            query, context,
-            f"📝 *Вопрос {current + 1} из {len(questions)}*\n\n"
-            f"{question['question']}",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+        text = f"📝 *Вопрос {current + 1} из {len(questions)}*\n\n{question['question']}"
+        
+        # Проверяем, есть ли у сообщения фото
+        if query.message.photo:
+            # Если это сообщение с фото, отправляем новое текстовое
+            await query.message.delete()
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+        else:
+            # Если это текстовое сообщение, редактируем как обычно
+            await edit_and_track(
+                query, context,
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
         
     except Exception as e:
         logger.error(f"❌ Ошибка в show_test_question: {e}")
@@ -2075,9 +2097,10 @@ async def handle_test_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         if not questions or current >= len(questions):
             logger.error(f"❌ Ошибка теста: questions={questions}, current={current}")
-            await edit_and_track(
-                query, context,
-                "❌ Ошибка теста. Начните заново."
+            await query.message.delete()
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="❌ Ошибка теста. Начните заново."
             )
             return
         
@@ -2103,20 +2126,32 @@ async def handle_test_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
         
         keyboard = [[InlineKeyboardButton("➡️ Далее", callback_data='next_question')]]
-        await edit_and_track(
-            query, context,
-            text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+        
+        # Проверяем, есть ли у сообщения фото
+        if query.message.photo:
+            await query.message.delete()
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+        else:
+            await edit_and_track(
+                query, context,
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
         
     except Exception as e:
         logger.error(f"❌ Ошибка в handle_test_answer: {e}")
         logger.error(traceback.format_exc())
         try:
-            await edit_and_track(
-                query, context,
-                "❌ Произошла ошибка. Начните тест заново."
+            await query.message.delete()
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="❌ Произошла ошибка. Начните тест заново."
             )
         except:
             pass
@@ -2132,11 +2167,20 @@ async def next_question_callback(update: Update, context: ContextTypes.DEFAULT_T
         if 'test_current' not in context.user_data or 'test_questions' not in context.user_data:
             logger.warning("❌ Данные теста не найдены")
             keyboard = [[InlineKeyboardButton("📝 Начать тест", callback_data='take_test')]]
-            await edit_and_track(
-                query, context,
-                "❌ Тест не найден. Начните заново.",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+            
+            if query.message.photo:
+                await query.message.delete()
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="❌ Тест не найден. Начните заново.",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            else:
+                await edit_and_track(
+                    query, context,
+                    "❌ Тест не найден. Начните заново.",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
             return
         
         await show_test_question(query, context)
@@ -2145,9 +2189,10 @@ async def next_question_callback(update: Update, context: ContextTypes.DEFAULT_T
         logger.error(f"❌ Ошибка в next_question_callback: {e}")
         logger.error(traceback.format_exc())
         try:
-            await edit_and_track(
-                query, context,
-                "❌ Произошла ошибка. Начните тест заново."
+            await query.message.delete()
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="❌ Произошла ошибка. Начните тест заново."
             )
         except:
             pass
@@ -2183,12 +2228,22 @@ async def finish_test(query, context):
     context.user_data.pop('test_current', None)
     context.user_data.pop('test_questions', None)
     
-    await edit_and_track(
-        query, context,
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    # Проверяем, есть ли у сообщения фото
+    if query.message.photo:
+        await query.message.delete()
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    else:
+        await edit_and_track(
+            query, context,
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
 
 # ========== МЕНЮ ИНФОРМАЦИИ ==========
 async def show_all_info_menu(query, context):
@@ -3014,3 +3069,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
