@@ -52,6 +52,15 @@ def get_db():
             DB_CONN = sqlite3.connect('bot_database.db', check_same_thread=False)
             init_database_tables(DB_CONN)
             load_backup()  # загружаем бэкап если есть
+        # Добавляем проверку, что соединение живо
+        DB_CONN.cursor().execute("SELECT 1").fetchone()
+        return DB_CONN
+    except sqlite3.ProgrammingError:
+        # Если соединение закрыто, создаем новое
+        logger.warning("⚠️ Глобальное соединение было закрыто, создаем новое!")
+        DB_CONN = sqlite3.connect('bot_database.db', check_same_thread=False)
+        init_database_tables(DB_CONN)
+        load_backup()
         return DB_CONN
     except Exception as e:
         logger.error(f"❌ Ошибка в get_db: {e}")
@@ -59,7 +68,6 @@ def get_db():
         init_database_tables(DB_CONN)
         load_backup()
         return DB_CONN
-
 def init_database_tables(conn):
     """Создает таблицы в переданном соединении"""
     c = conn.cursor()
@@ -300,7 +308,17 @@ def check_pending_couriers():
         records = sheet.get_all_records()
         logger.info(f"🔍 Проверяем {len(records)} записей в Google Sheets")
         
-        conn = get_db()
+        # ========== ПРОВЕРКА СОЕДИНЕНИЯ С БД ==========
+        try:
+            conn = get_db()
+            # Проверяем, что соединение живо
+            conn.cursor().execute("SELECT 1").fetchone()
+            logger.info("✅ Соединение с БД активно")
+        except Exception as e:
+            logger.error(f"❌ Соединение с БД не активно: {e}")
+            return
+        # ==============================================
+        
         c = conn.cursor()
         
         updated_count = 0          # сколько обновлено в БД
@@ -315,8 +333,8 @@ def check_pending_couriers():
                 city = record.get('Город', '').strip()
                 status_text = record.get('СТАТУС', '').strip()
                 
-                # ПОЛУЧАЕМ БАЛАНС (может быть в колонке Время или Баланс)
-                balance_raw = record.get('Время', '0') or record.get('Баланс', '0')
+                # ВАЖНО: читаем баланс ТОЛЬКО из колонки Баланс
+                balance_raw = record.get('Баланс', '0')
                 
                 # ПРИНЯТО и ОТКЛОНЕНО
                 accepted_raw = record.get('ПРИНЯТО', '0')
@@ -326,16 +344,30 @@ def check_pending_couriers():
                 accepted = str(accepted_raw).strip()
                 rejected = str(rejected_raw).strip()
                 
+                # ========== ЛОГИРОВАНИЕ БАЛАНСА ==========
+                logger.info(f"📊 Строка {i+2}: {full_name}")
+                logger.info(f"   Баланс raw: '{balance_raw}'")
+                
                 # Преобразуем баланс в число
                 try:
-                    balance = float(str(balance_raw).replace(',', '.').replace(' ', ''))
-                except:
+                    # Убираем пробелы, заменяем запятую на точку
+                    balance_str = str(balance_raw).strip().replace(' ', '').replace(',', '.')
+                    if balance_str and balance_str != '0':
+                        balance = float(balance_str)
+                        logger.info(f"   ✅ Баланс после преобразования: {balance}")
+                    else:
+                        balance = 0.0
+                        logger.info(f"   ℹ️ Баланс пустой или 0")
+                except Exception as e:
                     balance = 0.0
+                    logger.warning(f"   ⚠️ Ошибка преобразования баланса '{balance_raw}': {e}")
+                # =============================================
                 
                 sheet_row = i + 2  # номер строки в таблице
                 
                 # Пропускаем пустые строки
                 if not full_name or not city:
+                    logger.warning(f"⚠️ Строка {i+2} пропущена: нет имени или города")
                     continue
                 
                 # ========== ОПРЕДЕЛЯЕМ СТАТУС ==========
@@ -2423,6 +2455,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
