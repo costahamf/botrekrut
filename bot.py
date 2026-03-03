@@ -1404,12 +1404,24 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     protected_sections = ['withdrawal', 'personal_account', 'my_couriers', 'add_courier', 'rates']
     if test_passed == 0 and data in protected_sections:
         keyboard = [[InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')]]
-        await edit_and_track(
-            query, context,
-            "❌ *Доступ запрещен!*\n\nДля доступа к этому разделу необходимо пройти тест.",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+        text = "❌ *Доступ запрещен!*\n\nДля доступа к этому разделу необходимо пройти тест."
+        
+        # Проверяем, есть ли у сообщения фото
+        if query.message.photo:
+            await query.message.delete()
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+        else:
+            await edit_and_track(
+                query, context,
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
         return
     
     if data == 'all_info':
@@ -1440,7 +1452,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_test_answer(update, context)
     elif data in ['withdrawal_card', 'withdrawal_yoomoney', 'withdrawal_other']:
         await process_withdrawal_option(query, user_id, context)
-
 async def show_rates(query, context):
     """Временная заглушка для ставок по городам"""
     text = (
@@ -3167,6 +3178,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
