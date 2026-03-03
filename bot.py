@@ -2360,8 +2360,7 @@ async def show_info_section(query, context):
     section = query.data.replace('info_', '')
     
     info_texts = {
-        'rules_violation': "...",  # ваш текст
-        'ad_marking': "...",
+        'rules_violation': """
 📌 *Если курьер нарушает правила сервиса*
 
 ⚠️ *Важно понимать!*
@@ -3168,6 +3167,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
