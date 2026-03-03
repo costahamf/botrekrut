@@ -2020,9 +2020,8 @@ async def start_test(query, user_id, context):
                 parse_mode='Markdown'
             )
         else:
-            await edit_and_track(
-                query, context,
-                text,
+            await query.edit_message_text(
+                text=text,
                 parse_mode='Markdown'
             )
         return
@@ -2058,9 +2057,10 @@ async def show_test_question(query, context):
         
         text = f"📝 *Вопрос {current + 1} из {len(questions)}*\n\n{question['question']}"
         
-        # Проверяем, есть ли у сообщения фото
+        # ВАЖНО: Проверяем, есть ли у сообщения фото
         if query.message.photo:
-            # Если это сообщение с фото, отправляем новое текстовое
+            # Если это сообщение с фото - удаляем и отправляем новое
+            logger.info("🖼️ Обнаружено фото, отправляем новый текст")
             await query.message.delete()
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
@@ -2069,10 +2069,10 @@ async def show_test_question(query, context):
                 parse_mode='Markdown'
             )
         else:
-            # Если это текстовое сообщение, редактируем как обычно
-            await edit_and_track(
-                query, context,
-                text,
+            # Если это текстовое сообщение - редактируем
+            logger.info("📝 Редактируем текстовое сообщение")
+            await query.edit_message_text(
+                text=text,
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
             )
@@ -2097,11 +2097,14 @@ async def handle_test_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         if not questions or current >= len(questions):
             logger.error(f"❌ Ошибка теста: questions={questions}, current={current}")
-            await query.message.delete()
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text="❌ Ошибка теста. Начните заново."
-            )
+            if query.message.photo:
+                await query.message.delete()
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="❌ Ошибка теста. Начните заново."
+                )
+            else:
+                await query.edit_message_text("❌ Ошибка теста. Начните заново.")
             return
         
         question = questions[current]
@@ -2127,8 +2130,9 @@ async def handle_test_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         keyboard = [[InlineKeyboardButton("➡️ Далее", callback_data='next_question')]]
         
-        # Проверяем, есть ли у сообщения фото
+        # ВАЖНО: Проверяем, есть ли у сообщения фото
         if query.message.photo:
+            logger.info("🖼️ Обнаружено фото, отправляем новый текст")
             await query.message.delete()
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
@@ -2137,9 +2141,9 @@ async def handle_test_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 parse_mode='Markdown'
             )
         else:
-            await edit_and_track(
-                query, context,
-                text,
+            logger.info("📝 Редактируем текстовое сообщение")
+            await query.edit_message_text(
+                text=text,
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
             )
@@ -2148,14 +2152,16 @@ async def handle_test_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.error(f"❌ Ошибка в handle_test_answer: {e}")
         logger.error(traceback.format_exc())
         try:
-            await query.message.delete()
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text="❌ Произошла ошибка. Начните тест заново."
-            )
+            if query.message.photo:
+                await query.message.delete()
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="❌ Произошла ошибка. Начните тест заново."
+                )
+            else:
+                await query.edit_message_text("❌ Произошла ошибка. Начните тест заново.")
         except:
             pass
-
 async def next_question_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     
@@ -2176,9 +2182,8 @@ async def next_question_callback(update: Update, context: ContextTypes.DEFAULT_T
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
             else:
-                await edit_and_track(
-                    query, context,
-                    "❌ Тест не найден. Начните заново.",
+                await query.edit_message_text(
+                    text="❌ Тест не найден. Начните заново.",
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
             return
@@ -2189,11 +2194,14 @@ async def next_question_callback(update: Update, context: ContextTypes.DEFAULT_T
         logger.error(f"❌ Ошибка в next_question_callback: {e}")
         logger.error(traceback.format_exc())
         try:
-            await query.message.delete()
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text="❌ Произошла ошибка. Начните тест заново."
-            )
+            if query.message.photo:
+                await query.message.delete()
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="❌ Произошла ошибка. Начните тест заново."
+                )
+            else:
+                await query.edit_message_text("❌ Произошла ошибка. Начните тест заново.")
         except:
             pass
 
@@ -2228,8 +2236,9 @@ async def finish_test(query, context):
     context.user_data.pop('test_current', None)
     context.user_data.pop('test_questions', None)
     
-    # Проверяем, есть ли у сообщения фото
+    # ВАЖНО: Проверяем, есть ли у сообщения фото
     if query.message.photo:
+        logger.info("🖼️ Завершение теста с фото, отправляем результат")
         await query.message.delete()
         await context.bot.send_message(
             chat_id=query.message.chat_id,
@@ -2238,9 +2247,9 @@ async def finish_test(query, context):
             parse_mode='Markdown'
         )
     else:
-        await edit_and_track(
-            query, context,
-            text,
+        logger.info("📝 Завершение теста с текстом, редактируем")
+        await query.edit_message_text(
+            text=text,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
@@ -3069,4 +3078,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
