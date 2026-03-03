@@ -34,6 +34,13 @@ PERSONAL_ACCOUNT_URL = "https://partners-app.yandex.ru/team_ref/8647844ed8ee4d0e
 # URL для калькулятора дохода
 CALCULATOR_URL = "https://eda.yandex.ru/partner/perf/samara/?utm_medium=cpc&utm_source=yandex-hr&utm_campaign=%5BEDA%5DMX_Courier_RU-ALL-1M_Brand_search_NU%7C73792274&utm_term=49415175552%7C---autotargeting&utm_content=k50id%7C0100000049415175552_49415175552%7Ccid%7C73792274%7Cgid%7C5378729251%7Caid%7C15662855932%7Cadp%7Cno%7Cpos%7Cpremium1%7Csrc%7Csearch_none%7Cdvc%7Cdesktop%7Cmain&etext=2202.H1-umiWOxa1IhaqocPaUS69zT9wHAZdkgZEGqorPY5rJ_ebzkat1FDn2yZO3bEqDYssRPcp0IyJXzD9sTJXJ7293dG14ZXB1Z2VrdW1hemM.0d27564e0c3a01c61971ab0f3d5b481a3ae88ee1&yclid=14506292526793097215"
 
+# ========== ИЗОБРАЖЕНИЯ ==========
+# Прямые ссылки с ImgBB
+IMAGES = {
+    'test_required': 'https://i.ibb.co/yFQr7VHx/photo-2026-03-03-19-24-40-1.jpg',  # Начальное меню с тестом
+    'main_menu': 'https://i.ibb.co/5hQCccsB/photo-2026-03-03-19-24-49-1.jpg'       # Главное меню
+}
+
 # ========== ПОСТОЯННОЕ ХРАНЕНИЕ ДАННЫХ ==========
 DB_PATH = 'bot_database.db'
 BACKUP_FILE = 'backup.json'
@@ -935,6 +942,37 @@ async def edit_and_track(query, context: ContextTypes.DEFAULT_TYPE, text: str, r
     context.user_data['last_bot_message_id'] = query.message.message_id
     context.user_data['last_chat_id'] = query.message.chat_id
 
+async def send_menu_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, menu_type: str, caption: str, keyboard=None):
+    """Отправляет изображение меню"""
+    await delete_previous_messages(update, context)
+    
+    chat_id = None
+    if update.callback_query:
+        chat_id = update.callback_query.message.chat_id
+    elif update.message:
+        chat_id = update.message.chat_id
+    
+    if chat_id:
+        try:
+            photo_url = IMAGES.get(menu_type, IMAGES['main_menu'])
+            
+            message = await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=photo_url,
+                caption=caption,
+                reply_markup=keyboard,
+                parse_mode='Markdown'
+            )
+            
+            context.user_data['last_bot_message_id'] = message.message_id
+            context.user_data['last_chat_id'] = message.chat_id
+            return message
+        except Exception as e:
+            logger.error(f"Ошибка отправки фото: {e}")
+            return await send_and_track(update, context, caption, keyboard, 'Markdown')
+    
+    return None
+
 # ========== ФУНКЦИИ ПОДДЕРЖКИ ==========
 def create_support_ticket(user_id, username, first_name, message):
     conn = get_db()
@@ -1286,10 +1324,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not is_registered(user_id):
         register_user(user_id, user.username, user.first_name, user.last_name)
-        await send_and_track(
+        await send_menu_photo(
             update, context,
-            f"👋 Добро пожаловать, {user.first_name}!\n\n"
-            "Вы успешно зарегистрированы в системе."
+            menu_type='test_required',
+            caption=f"👋 Добро пожаловать, {user.first_name}!\n\nВы успешно зарегистрированы в системе."
         )
     else:
         logger.info(f"👤 Пользователь {user_id} уже зарегистрирован")
@@ -1312,19 +1350,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🆘 Обратиться в поддержку", callback_data='support')]
         ]
         menu_text = "🏠 *Главное меню*\n\nВыберите нужный раздел:"
+        
+        await send_menu_photo(
+            update, context,
+            menu_type='main_menu',
+            caption=menu_text,
+            keyboard=InlineKeyboardMarkup(keyboard)
+        )
     else:
         keyboard = [
             [InlineKeyboardButton("📋 Вся информация", callback_data='all_info')],
             [InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')]
         ]
         menu_text = "📚 *Для доступа к полному функционалу необходимо пройти тест*\n\nВыберите действие:"
-    
-    await send_and_track(
-        update, context,
-        menu_text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+        
+        await send_menu_photo(
+            update, context,
+            menu_type='test_required',
+            caption=menu_text,
+            keyboard=InlineKeyboardMarkup(keyboard)
+        )
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2310,6 +2355,8 @@ async def back_to_main(query, user_id, context):
     result = c.fetchone()
     test_passed = result[0] if result else 0
     
+    await query.message.delete()
+    
     if test_passed == 1:
         keyboard = [
             [InlineKeyboardButton("📋 Вся информация", callback_data='all_info')],
@@ -2320,19 +2367,28 @@ async def back_to_main(query, user_id, context):
             [InlineKeyboardButton("🆘 Обратиться в поддержку", callback_data='support')]
         ]
         menu_text = "🏠 *Главное меню*\n\nВыберите нужный раздел:"
+        
+        await context.bot.send_photo(
+            chat_id=query.message.chat_id,
+            photo=IMAGES['main_menu'],
+            caption=menu_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
     else:
         keyboard = [
             [InlineKeyboardButton("📋 Вся информация", callback_data='all_info')],
             [InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')]
         ]
         menu_text = "📚 *Для доступа к полному функционалу необходимо пройти тест*\n\nВыберите действие:"
-    
-    await edit_and_track(
-        query, context,
-        menu_text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+        
+        await context.bot.send_photo(
+            chat_id=query.message.chat_id,
+            photo=IMAGES['test_required'],
+            caption=menu_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
 
 # ========== ОБРАБОТЧИК СООБЩЕНИЙ ==========
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
