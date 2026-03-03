@@ -1454,13 +1454,23 @@ async def show_rates(query, context):
     )
     
     keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]]
-    await edit_and_track(
-        query, context,
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
-
+    
+    # Проверяем, есть ли у сообщения фото
+    if query.message.photo:
+        await query.message.delete()
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    else:
+        await edit_and_track(
+            query, context,
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
 # ========== ВЫВОД СРЕДСТВ ==========
 async def withdrawal_menu(query, user_id, context):
     balance = get_user_balance(user_id)
@@ -1485,12 +1495,22 @@ async def withdrawal_menu(query, user_id, context):
         [InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]
     ]
     
-    await edit_and_track(
-        query, context,
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    # Проверяем, есть ли у сообщения фото
+    if query.message.photo:
+        await query.message.delete()
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    else:
+        await edit_and_track(
+            query, context,
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
 
 async def user_withdrawal_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает историю выводов пользователя"""
@@ -1547,16 +1567,31 @@ async def process_withdrawal_option(query, user_id, context):
     method = query.data.replace('withdrawal_', '')
     context.user_data['withdrawal_method'] = method
     
-    keyboard = [[InlineKeyboardButton("🔙 Отмена", callback_data='withdrawal')]]
-    await edit_and_track(
-        query, context,
+    text = (
         f"Выбран способ: *{method}*\n\n"
         f"Введите сумму и реквизиты в формате:\n"
         f"Сумма|Реквизиты\n\n"
-        f"Пример: 500|1234567890123456",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
+        f"Пример: 500|1234567890123456"
     )
+    
+    keyboard = [[InlineKeyboardButton("🔙 Отмена", callback_data='withdrawal')]]
+    
+    # Проверяем, есть ли у сообщения фото
+    if query.message.photo:
+        await query.message.delete()
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    else:
+        await edit_and_track(
+            query, context,
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
     
     context.user_data['awaiting_withdrawal_details'] = True
 
@@ -1870,12 +1905,26 @@ async def personal_account_menu(query, user_id, context):
         [InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]
     ]
     
-    await edit_and_track(
-        query, context,
-        "👤 *Личный кабинет*\n\nВыберите действие:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    text = "👤 *Личный кабинет*\n\nВыберите действие:"
+    
+    # Проверяем, есть ли у сообщения фото
+    if query.message.photo:
+        # Если это фото - удаляем и отправляем новое текстовое
+        await query.message.delete()
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    else:
+        # Если это текст - редактируем
+        await edit_and_track(
+            query, context,
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
 
 async def show_my_couriers(query, user_id, context):
     couriers = get_recruiter_couriers(user_id)
@@ -1912,13 +1961,22 @@ async def show_my_couriers(query, user_id, context):
         [InlineKeyboardButton("🔙 Назад", callback_data='personal_account')]
     ]
     
-    await edit_and_track(
-        query, context,
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
-
+    # Проверяем, есть ли у сообщения фото
+    if query.message.photo:
+        await query.message.delete()
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    else:
+        await edit_and_track(
+            query, context,
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
 async def add_courier_start(query, user_id, context):
     text = (
         "📝 *Запись курьера*\n\n"
@@ -1930,12 +1988,23 @@ async def add_courier_start(query, user_id, context):
     )
     
     keyboard = [[InlineKeyboardButton("🔙 Отмена", callback_data='personal_account')]]
-    await edit_and_track(
-        query, context,
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    
+    # Проверяем, есть ли у сообщения фото
+    if query.message.photo:
+        await query.message.delete()
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    else:
+        await edit_and_track(
+            query, context,
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
     
     context.user_data['awaiting_courier_data'] = True
 
@@ -2268,20 +2337,31 @@ async def show_all_info_menu(query, context):
         [InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]
     ]
     
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    text = "📋 *Вся информация*\n\nВыберите интересующий вас раздел:"
     
-    await edit_and_track(
-        query, context,
-        "📋 *Вся информация*\n\nВыберите интересующий вас раздел:",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
+    # Проверяем, есть ли у сообщения фото
+    if query.message.photo:
+        await query.message.delete()
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    else:
+        await edit_and_track(
+            query, context,
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
 
 async def show_info_section(query, context):
     section = query.data.replace('info_', '')
     
     info_texts = {
-        'rules_violation': """
+        'rules_violation': "...",  # ваш текст
+        'ad_marking': "...",
 📌 *Если курьер нарушает правила сервиса*
 
 ⚠️ *Важно понимать!*
@@ -2404,12 +2484,22 @@ async def show_info_section(query, context):
     else:
         keyboard = [[InlineKeyboardButton("🔙 Назад к разделам", callback_data='back_to_info')]]
     
-    await edit_and_track(
-        query, context,
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    # Проверяем, есть ли у сообщения фото
+    if query.message.photo:
+        await query.message.delete()
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    else:
+        await edit_and_track(
+            query, context,
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
 
 # ========== НАВИГАЦИЯ ==========
 async def back_to_main(query, user_id, context):
@@ -3078,5 +3168,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
