@@ -646,6 +646,7 @@ def get_withdrawals_sheet():
             logger.info("📝 Лист 'Выводы' не найден, создаем новый...")
             withdrawals_sheet = spreadsheet.add_worksheet(title="Выводы", rows=1000, cols=9)
             
+            # ВАЖНО: Используем ТОЧНО такие же названия, как у вас в таблице
             headers = ["Дата", "User ID", "Username", "Имя", "Сумма", "Способ", "Реквизиты", "Статус", "Дата подтверждения"]
             withdrawals_sheet.append_row(headers, value_input_option='USER_ENTERED')
             
@@ -664,16 +665,17 @@ def add_withdrawal_to_sheet(user_id, username, first_name, amount, method, detai
             logger.error("❌ Не удалось подключиться к листу 'Выводы'")
             return False
         
+        # Формируем строку строго по вашим столбцам
         row = [
-            datetime.now().strftime("%d.%m.%Y %H:%M"),
-            str(user_id),
-            f"@{username}" if username else "-",
-            first_name,
-            amount,
-            method,
-            details,
-            "⏳ Ожидает",
-            "-"
+            datetime.now().strftime("%d.%m.%Y %H:%M"),  # Дата
+            str(user_id),                                # User ID
+            f"@{username}" if username else "-",        # Username
+            first_name,                                  # Имя
+            amount,                                      # Сумма
+            method,                                      # Способ
+            details,                                     # Реквизиты
+            "⏳ Ожидает",                                 # Статус
+            "-"                                          # Дата подтверждения
         ]
         
         withdrawals_sheet.append_row(row, value_input_option='USER_ENTERED')
@@ -691,14 +693,22 @@ def update_withdrawal_status_in_sheet(request_id, user_id, amount, status_text, 
         if not withdrawals_sheet:
             return False
         
+        # Получаем все записи
         records = withdrawals_sheet.get_all_records()
         
+        # Ищем запись по User ID и Сумме
         for i, record in enumerate(records):
-            if str(record.get('User ID', '')) == str(user_id) and str(record.get('Сумма', '')) == str(amount) and record.get('Статус') == "⏳ Ожидает":
-                row_number = i + 2
+            # Проверяем совпадение по User ID и сумме
+            if str(record.get('User ID', '')).strip() == str(user_id) and \
+               str(record.get('Сумма', '')).strip() == str(amount) and \
+               record.get('Статус') == "⏳ Ожидает":
                 
+                row_number = i + 2  # +2 потому что 1-я строка - заголовки
+                
+                # Обновляем статус (столбец H = 8)
                 withdrawals_sheet.update_cell(row_number, 8, status_text)
                 
+                # Обновляем дату подтверждения (столбец I = 9)
                 if completed_date:
                     withdrawals_sheet.update_cell(row_number, 9, completed_date)
                 elif status_text == "❌ Отклонен":
@@ -3313,3 +3323,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
