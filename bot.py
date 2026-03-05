@@ -40,7 +40,50 @@ IMAGES = {
     'test_required': 'https://i.ibb.co/yFQr7VHx/photo-2026-03-03-19-24-40-1.jpg',  # Начальное меню с тестом
     'main_menu': 'https://i.ibb.co/5hQCccsB/photo-2026-03-03-19-24-49-1.jpg'       # Главное меню
 }
-
+# ========== ФУНКЦИИ ДЛЯ ПЕРЕСЧЕТА БАЛАНСОВ ==========
+def recalc_all_balances():
+    """Пересчитывает балансы всех пользователей (курьеры - выводы)"""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Получаем всех пользователей
+        c.execute("SELECT user_id FROM users")
+        users = c.fetchall()
+        
+        count = 0
+        for user in users:
+            user_id = user[0]
+            
+            # Сумма всех курьеров
+            c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (user_id,))
+            couriers_sum = c.fetchone()[0] or 0
+            
+            # Сумма всех подтвержденных выводов
+            c.execute("SELECT SUM(amount) FROM withdrawals WHERE user_id = ? AND status = 'completed'", (user_id,))
+            withdrawals_sum = c.fetchone()[0] or 0
+            
+            # Реальный баланс
+            real_balance = couriers_sum - withdrawals_sum
+            
+            # Получаем текущий баланс
+            c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+            current = c.fetchone()
+            current_balance = current[0] if current else 0
+            
+            # Обновляем если отличается
+            if current_balance != real_balance:
+                c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (real_balance, user_id))
+                logger.info(f"💰 Пользователь {user_id}: {current_balance} -> {real_balance} (курьеры: {couriers_sum}, выводы: {withdrawals_sum})")
+                count += 1
+        
+        conn.commit()
+        logger.info(f"✅ Пересчитаны балансы для {count} пользователей")
+        return count
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при пересчете балансов: {e}")
+        return 0
 # ========== ПОСТОЯННОЕ ХРАНЕНИЕ ДАННЫХ ==========
 DB_PATH = 'bot_database.db'
 BACKUP_FILE = 'backup.json'
@@ -118,6 +161,13 @@ def init_database():
         load_from_google_sheets()
     except Exception as e:
         logger.error(f"❌ Ошибка загрузки из Google Sheets при старте: {e}")
+    
+    # ВАЖНО: Пересчитываем балансы после загрузки
+    try:
+        logger.info("🔄 Пересчитываем балансы после загрузки...")
+        recalc_all_balances()
+    except Exception as e:
+        logger.error(f"❌ Ошибка при пересчете балансов: {e}")
     
     logger.info("✅ База данных инициализирована")
 
@@ -505,40 +555,45 @@ def check_pending_couriers():
                 logger.error(traceback.format_exc())
                 continue
         
-        logger.info("🔄 Пересчитываем балансы всех рекрутеров...")
+        # Пересчитываем балансы для ВСЕХ пользователей (не только с курьерами)
+        logger.info("🔄 Пересчитываем балансы всех пользователей...")
         
-        c.execute("SELECT DISTINCT recruiter_id FROM couriers WHERE recruiter_id IS NOT NULL")
-        all_recruiters = c.fetchall()
+        c.execute("SELECT user_id FROM users")
+        all_users = c.fetchall()
         
         balance_recalc_count = 0
-        for recruiter in all_recruiters:
-            recruiter_id = recruiter[0]
+        for user in all_users:
+            user_id = user[0]
             
-            c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (recruiter_id,))
+            # Сумма всех курьеров
+            c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (user_id,))
             couriers_sum = c.fetchone()[0] or 0
             
-            c.execute("SELECT SUM(amount) FROM withdrawals WHERE user_id = ? AND status = 'completed'", (recruiter_id,))
+            # Сумма всех подтвержденных выводов
+            c.execute("SELECT SUM(amount) FROM withdrawals WHERE user_id = ? AND status = 'completed'", (user_id,))
             withdrawals_sum = c.fetchone()[0] or 0
             
+            # Реальный баланс
             real_balance = couriers_sum - withdrawals_sum
             
-            c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (real_balance, recruiter_id))
+            # Получаем текущий баланс
+            c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+            current_balance = c.fetchone()[0] or 0
             
-            c.execute("SELECT username, first_name FROM users WHERE user_id = ?", (recruiter_id,))
-            user = c.fetchone()
-            if user:
-                logger.info(f"   👤 {user[1]} (@{user[0]}) - новый баланс: {real_balance} руб.")
-            
-            balance_recalc_count += 1
+            # Обновляем если отличается
+            if current_balance != real_balance:
+                c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (real_balance, user_id))
+                logger.info(f"   👤 Пользователь {user_id}: {current_balance} -> {real_balance} (курьеры: {couriers_sum}, выводы: {withdrawals_sum})")
+                balance_recalc_count += 1
         
         conn.commit()
         
         logger.info(f"📊 ИТОГИ СИНХРОНИЗАЦИИ:")
         logger.info(f"   • Обновлено статусов в БД: {updated_count}")
-        logger.info(f"   • Обновлено балансов в БД: {balance_updated_count}")
+        logger.info(f"   • Обновлено балансов курьеров: {balance_updated_count}")
         logger.info(f"   • Добавлено новых курьеров: {new_count}")
         logger.info(f"   • Обновлено в таблице: {sheet_updated_count}")
-        logger.info(f"   • Пересчитаны балансы для: {balance_recalc_count} рекрутеров")
+        logger.info(f"   • Исправлено балансов пользователей: {balance_recalc_count}")
         
     except Exception as e:
         logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА В check_pending_couriers: {e}")
@@ -1052,14 +1107,18 @@ def get_user_balance(user_id):
         conn = get_db()
         c = conn.cursor()
         
+        # Сумма всех курьеров
         c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (user_id,))
         couriers_sum = c.fetchone()[0] or 0
         
+        # Сумма всех подтвержденных выводов
         c.execute("SELECT SUM(amount) FROM withdrawals WHERE user_id = ? AND status = 'completed'", (user_id,))
         withdrawals_sum = c.fetchone()[0] or 0
         
+        # Реальный баланс
         real_balance = couriers_sum - withdrawals_sum
         
+        # Обновляем баланс в таблице users для консистентности
         c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (real_balance, user_id))
         conn.commit()
         
@@ -1179,6 +1238,9 @@ async def confirm_withdrawal(request_id, context):
         
         conn.commit()
         
+        # Пересчитываем балансы после подтверждения
+        recalc_all_balances()
+        
         new_balance = get_user_balance(user_id)
         
         logger.info(f"✅ Подтвержден вывод {amount} для пользователя {user_id}. Новый баланс: {new_balance}")
@@ -1219,6 +1281,9 @@ async def reject_withdrawal(request_id, reason, context):
                   (completed_date, reason, request_id))
         
         conn.commit()
+        
+        # Пересчитываем балансы после отказа
+        recalc_all_balances()
         
         new_balance = get_user_balance(user_id)
         
@@ -3212,6 +3277,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
