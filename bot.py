@@ -670,16 +670,20 @@ def get_withdrawals_sheet():
         try:
             withdrawals_sheet = spreadsheet.worksheet("Выводы")
             logger.info("✅ Подключение к листу 'Выводы' установлено")
+            
+            # Проверим заголовки
+            headers = withdrawals_sheet.row_values(1)
+            logger.info(f"📋 Заголовки таблицы: {headers}")
+            
             return withdrawals_sheet
         except gspread.WorksheetNotFound:
             logger.info("📝 Лист 'Выводы' не найден, создаем новый...")
             withdrawals_sheet = spreadsheet.add_worksheet(title="Выводы", rows=1000, cols=9)
             
-            # ВАЖНО: Используем ТОЧНО такие же названия, как у вас в таблице
             headers = ["Дата", "User ID", "Username", "Имя", "Сумма", "Способ", "Реквизиты", "Статус", "Дата подтверждения"]
             withdrawals_sheet.append_row(headers, value_input_option='USER_ENTERED')
             
-            logger.info("✅ Лист 'Выводы' создан")
+            logger.info("✅ Лист 'Выводы' создан с заголовками: {headers}")
             return withdrawals_sheet
             
     except Exception as e:
@@ -716,41 +720,149 @@ def add_withdrawal_to_sheet(user_id, username, first_name, amount, method, detai
         return False
 
 def update_withdrawal_status_in_sheet(request_id, user_id, amount, status_text, completed_date=None):
-    """Обновляет статус заявки в Google Sheets"""
+    """Обновляет статус заявки в Google Sheets - УЛУЧШЕННАЯ ВЕРСИЯ"""
     try:
         withdrawals_sheet = get_withdrawals_sheet()
         if not withdrawals_sheet:
+            logger.error("❌ Не удалось подключиться к листу 'Выводы'")
             return False
         
-        # Получаем все записи
-        records = withdrawals_sheet.get_all_records()
+        # Получаем все значения (не только записи, а сырые данные)
+        all_values = withdrawals_sheet.get_all_values()
         
-        # Ищем запись по User ID и Сумме
-        for i, record in enumerate(records):
-            # Проверяем совпадение по User ID и сумме
-            if str(record.get('User ID', '')).strip() == str(user_id) and \
-               str(record.get('Сумма', '')).strip() == str(amount) and \
-               record.get('Статус') == "⏳ Ожидает":
+        if not all_values or len(all_values) < 2:
+            logger.warning("⚠️ В таблице нет данных")
+            return False
+        
+        headers = all_values[0]  # Первая строка - заголовки
+        
+        # Находим индексы нужных столбцов
+        user_id_col = None
+        amount_col = None
+        status_col = None
+        date_col = None
+        
+        for i, header in enumerate(headers):
+            if header == "User ID":
+                user_id_col = i + 1  # +1 потому что gspread считает с 1
+            elif header == "Сумма":
+                amount_col = i + 1
+            elif header == "Статус":
+                status_col = i + 1
+            elif header == "Дата подтверждения":
+                date_col = i + 1
+        
+        if not user_id_col or not amount_col or not status_col:
+            logger.error(f"❌ Не найдены нужные столбцы: User ID={user_id_col}, Сумма={amount_col}, Статус={status_col}")
+            return False
+        
+        # Ищем строку с нашей заявкой
+        found_row = None
+        for row_idx, row in enumerate(all_values[1:], start=2):  # начинаем со 2 строки
+            if len(row) < max(user_id_col, amount_col, status_col):
+                continue
                 
-                row_number = i + 2  # +2 потому что 1-я строка - заголовки
+            # Получаем значения из ячеек
+            row_user_id = str(row[user_id_col - 1]).strip() if user_id_col - 1 < len(row) else ""
+            row_amount = str(row[amount_col - 1]).strip() if amount_col - 1 < len(row) else ""
+            row_status = str(row[status_col - 1]).strip() if status_col - 1 < len(row) else ""
+            
+            # Сравниваем (очищаем от лишних символов)
+            row_user_id_clean = row_user_id.replace(' ', '').replace('@', '').replace('user_', '')
+            str_user_id = str(user_id).strip()
+            
+            row_amount_clean = row_amount.replace(' ', '').replace(',', '.').replace('руб', '').strip()
+            str_amount = str(amount).strip()
+            
+            # Проверяем совпадение
+            if (row_user_id_clean == str_user_id or row_user_id == str_user_id) and \
+               (row_amount_clean == str_amount or row_amount == str_amount) and \
+               (row_status == "⏳ Ожидает" or "ожидает" in row_status.lower()):
                 
-                # Обновляем статус (столбец H = 8)
-                withdrawals_sheet.update_cell(row_number, 8, status_text)
+                found_row = row_idx
+                logger.info(f"✅ Найдена строка {row_idx}: UserID={row_user_id}, Сумма={row_amount}")
+                break
+        
+        if not found_row:
+            # Если не нашли, попробуем поискать по дате (последняя запись с таким user_id)
+            logger.warning(f"⚠️ Точное совпадение не найдено, ищем последнюю запись для user_id {user_id}")
+            
+            last_row_for_user = None
+            last_date = None
+            
+            for row_idx, row in enumerate(all_values[1:], start=2):
+                if len(row) < user_id_col:
+                    continue
+                    
+                row_user_id = str(row[user_id_col - 1]).strip() if user_id_col - 1 < len(row) else ""
+                row_user_id_clean = row_user_id.replace(' ', '').replace('@', '').replace('user_', '')
                 
-                # Обновляем дату подтверждения (столбец I = 9)
+                if row_user_id_clean == str(user_id) or row_user_id == str(user_id):
+                    # Проверяем дату (первый столбец)
+                    row_date = row[0] if len(row) > 0 else ""
+                    if not last_date or row_date > last_date:
+                        last_date = row_date
+                        last_row_for_user = row_idx
+            
+            if last_row_for_user:
+                found_row = last_row_for_user
+                logger.info(f"✅ Найдена последняя запись для user_id {user_id} в строке {found_row}")
+        
+        if found_row:
+            # Обновляем статус
+            withdrawals_sheet.update_cell(found_row, status_col, status_text)
+            logger.info(f"✅ Обновлен статус в строке {found_row}: {status_text}")
+            
+            # Обновляем дату подтверждения
+            if date_col:
                 if completed_date:
-                    withdrawals_sheet.update_cell(row_number, 9, completed_date)
+                    withdrawals_sheet.update_cell(found_row, date_col, completed_date)
                 elif status_text == "❌ Отклонен":
-                    withdrawals_sheet.update_cell(row_number, 9, datetime.now().strftime("%d.%m.%Y %H:%M"))
+                    withdrawals_sheet.update_cell(found_row, date_col, datetime.now().strftime("%d.%m.%Y %H:%M"))
+            
+            logger.info(f"✅ Статус заявки #{request_id} обновлен в Google Sheets")
+            return True
+        else:
+            logger.error(f"❌ Не найдена запись для заявки #{request_id} (user_id={user_id}, amount={amount})")
+            
+            # Создадим новую запись с обновленным статусом
+            try:
+                # Получаем данные пользователя
+                conn = get_db()
+                c = conn.cursor()
+                c.execute("SELECT username, first_name FROM users WHERE user_id = ?", (user_id,))
+                user = c.fetchone()
+                username = user[0] if user else None
+                first_name = user[1] if user else "Пользователь"
                 
-                logger.info(f"✅ Обновлен статус заявки #{request_id} в Google Sheets: {status_text}")
+                # Получаем метод из старой заявки
+                c.execute("SELECT payment_method, payment_details FROM withdrawals WHERE id = ?", (request_id,))
+                withdrawal = c.fetchone()
+                method = withdrawal[0] if withdrawal else "Неизвестно"
+                details = withdrawal[1] if withdrawal else ""
+                
+                # Создаем новую запись
+                new_row = [
+                    datetime.now().strftime("%d.%m.%Y %H:%M"),
+                    str(user_id),
+                    f"@{username}" if username else "-",
+                    first_name,
+                    amount,
+                    method,
+                    details,
+                    status_text,
+                    completed_date or datetime.now().strftime("%d.%m.%Y %H:%M")
+                ]
+                withdrawals_sheet.append_row(new_row, value_input_option='USER_ENTERED')
+                logger.info(f"✅ Создана новая запись для заявки #{request_id} со статусом {status_text}")
                 return True
-        
-        logger.warning(f"⚠️ Запись для заявки #{request_id} не найдена в Google Sheets")
-        return False
+            except Exception as e:
+                logger.error(f"❌ Ошибка при создании новой записи: {e}")
+                return False
         
     except Exception as e:
         logger.error(f"❌ Ошибка обновления статуса в Google Sheets: {e}")
+        logger.error(traceback.format_exc())
         return False
 
 def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, city):
@@ -3425,6 +3537,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
