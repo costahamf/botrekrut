@@ -1781,15 +1781,27 @@ async def support_start(query, user_id, context):
     )
     
     keyboard = [[InlineKeyboardButton("🔙 Отмена", callback_data='back_to_main')]]
-    await edit_and_track(
-        query, context,
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    
+    # ВАЖНО: Проверяем, есть ли у сообщения фото
+    if query.message.photo:
+        # Если это сообщение с фото - удаляем и отправляем новое текстовое
+        await query.message.delete()
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    else:
+        # Если это текстовое сообщение - редактируем
+        await edit_and_track(
+            query, context,
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
     
     context.user_data['awaiting_support_message'] = True
-
 async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message_text = update.message.text
@@ -3178,6 +3190,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
