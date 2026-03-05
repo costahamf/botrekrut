@@ -2377,21 +2377,31 @@ async def finish_test(query, context):
     
     if correct_count >= 7:
         # Тест сдан успешно
-        logger.info(f"✅ Пользователь {user_id} сдал тест")
+        logger.info(f"✅ Пользователь {user_id} сдал тест (правильных ответов: {correct_count})")
+        
+        # Обновляем статус в БД
         update_test_status(user_id, True)
+        
+        # Проверяем, что статус действительно обновился
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
+        new_status = c.fetchone()[0]
+        logger.info(f"📊 После обновления test_passed в БД = {new_status}")
         
         # Очищаем данные теста
         context.user_data.pop('test_answers', None)
         context.user_data.pop('test_current', None)
         context.user_data.pop('test_questions', None)
         
-        # Показываем главное меню
+        # Показываем главное меню (с полным доступом)
+        logger.info(f"🏠 Перенаправляем пользователя {user_id} в главное меню")
         await back_to_main(query, user_id, context)
         return
         
     elif correct_count < 3:
         # Полный провал
-        logger.info(f"❌ Пользователь {user_id} провалил тест")
+        logger.info(f"❌ Пользователь {user_id} провалил тест (правильных ответов: {correct_count})")
         update_test_status(user_id, False)
         text = (
             f"❌ *Тест не пройден*\n\n"
@@ -2399,9 +2409,30 @@ async def finish_test(query, context):
             f"⏳ Следующая попытка будет доступна через *30 минут*."
         )
         keyboard = [[InlineKeyboardButton("🏠 В главное меню", callback_data='back_to_main')]]
+        
+        # Очищаем данные теста
+        context.user_data.pop('test_answers', None)
+        context.user_data.pop('test_current', None)
+        context.user_data.pop('test_questions', None)
+        
+        # Отправляем результат
+        if query.message.photo:
+            await query.message.delete()
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text(
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
     else:
         # Можно попробовать снова
-        logger.info(f"⚠️ Пользователь {user_id} не сдал тест, но может попробовать снова")
+        logger.info(f"⚠️ Пользователь {user_id} не сдал тест, но может попробовать снова (правильных ответов: {correct_count})")
         update_test_status(user_id, False)
         text = (
             f"⚠️ *Тест не пройден*\n\n"
@@ -2409,27 +2440,27 @@ async def finish_test(query, context):
             f"📝 Вы можете попробовать снова прямо сейчас."
         )
         keyboard = [[InlineKeyboardButton("📝 Пройти тест заново", callback_data='take_test')]]
-    
-    # Очищаем данные теста
-    context.user_data.pop('test_answers', None)
-    context.user_data.pop('test_current', None)
-    context.user_data.pop('test_questions', None)
-    
-    # Отправляем результат
-    if query.message.photo:
-        await query.message.delete()
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text=text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
-    else:
-        await query.edit_message_text(
-            text=text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+        
+        # Очищаем данные теста
+        context.user_data.pop('test_answers', None)
+        context.user_data.pop('test_current', None)
+        context.user_data.pop('test_questions', None)
+        
+        # Отправляем результат
+        if query.message.photo:
+            await query.message.delete()
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text(
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
 
 # ========== МЕНЮ ИНФОРМАЦИИ ==========
 async def show_all_info_menu(query, context):
@@ -2616,11 +2647,12 @@ async def back_to_main(query, user_id, context):
     result = c.fetchone()
     test_passed = result[0] if result else 0
     
-    logger.info(f"🏠 Возврат в главное меню для пользователя {user_id}, test_passed={test_passed}")
+    logger.info(f"🏠 Возврат в главное меню для пользователя {user_id}, test_passed из БД = {test_passed}")
     
     await query.message.delete()
     
     if test_passed == 1:
+        logger.info(f"✅ Пользователь {user_id} имеет доступ к полному меню")
         keyboard = [
             [InlineKeyboardButton("📋 Вся информация", callback_data='all_info')],
             [InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')],
@@ -2639,6 +2671,7 @@ async def back_to_main(query, user_id, context):
             parse_mode='Markdown'
         )
     else:
+        logger.info(f"❌ Пользователь {user_id} НЕ имеет доступа к полному меню")
         keyboard = [
             [InlineKeyboardButton("📋 Вся информация", callback_data='all_info')],
             [InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')]
@@ -3277,6 +3310,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
