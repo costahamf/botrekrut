@@ -247,18 +247,38 @@ def update_test_status(user_id, passed):
         conn = get_db()
         c = conn.cursor()
         
+        # Сначала проверим, есть ли пользователь
+        c.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+        if not c.fetchone():
+            logger.error(f"❌ Пользователь {user_id} не найден в БД!")
+            return False
+        
+        # Обновляем статус
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         c.execute("""UPDATE users 
                      SET test_passed = ?, last_test_attempt = ? 
                      WHERE user_id = ?""",
-                  (1 if passed else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
+                  (1 if passed else 0, current_time, user_id))
         conn.commit()
         
+        # Проверяем, что обновилось
         c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
         new_value = c.fetchone()[0]
+        
         logger.info(f"✅ Обновлен test_passed для {user_id} на {new_value}")
+        
+        # Дополнительная проверка
+        if new_value == 1:
+            logger.info(f"🎯 Пользователь {user_id} успешно сдал тест!")
+            return True
+        else:
+            logger.error(f"❌ Не удалось обновить test_passed для {user_id}")
+            return False
         
     except Exception as e:
         logger.error(f"Ошибка в update_test_status: {e}")
+        logger.error(traceback.format_exc())
+        return False
 
 def can_take_test(user_id):
     try:
@@ -2441,13 +2461,51 @@ async def finish_test(query, context):
     
     if correct_count >= 7:
         logger.info(f"✅ Пользователь {user_id} сдал тест")
-        update_test_status(user_id, True)
         
+        # Обновляем статус
+        success = update_test_status(user_id, True)
+        
+        if not success:
+            logger.error(f"❌ Ошибка при сохранении теста для {user_id}")
+            # Попробуем еще раз
+            update_test_status(user_id, True)
+        
+        # Очищаем данные теста
         context.user_data.pop('test_answers', None)
         context.user_data.pop('test_current', None)
         context.user_data.pop('test_questions', None)
         
-        await back_to_main(query, user_id, context)
+        # Проверяем, что статус действительно обновился
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
+        test_passed = c.fetchone()[0]
+        logger.info(f"📊 Проверка после теста: test_passed = {test_passed}")
+        
+        # Принудительно удаляем старое сообщение и показываем главное меню
+        try:
+            await query.message.delete()
+        except:
+            pass
+        
+        # Показываем главное меню с полным доступом
+        keyboard = [
+            [InlineKeyboardButton("📋 Вся информация", callback_data='all_info')],
+            [InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')],
+            [InlineKeyboardButton("💰 Вывод средств", callback_data='withdrawal')],
+            [InlineKeyboardButton("👤 Личный кабинет", callback_data='personal_account')],
+            [InlineKeyboardButton("💼 Ставки по городам", callback_data='rates')],
+            [InlineKeyboardButton("🆘 Обратиться в поддержку", callback_data='support')]
+        ]
+        menu_text = "🏠 *Главное меню*\n\nВыберите нужный раздел:"
+        
+        await context.bot.send_photo(
+            chat_id=query.message.chat_id,
+            photo=IMAGES['main_menu'],
+            caption=menu_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
         return
         
     elif correct_count < 3:
@@ -2506,7 +2564,6 @@ async def finish_test(query, context):
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
             )
-
 # ========== МЕНЮ ИНФОРМАЦИИ ==========
 async def show_all_info_menu(query, context):
     keyboard = [
@@ -3371,5 +3428,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
