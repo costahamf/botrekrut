@@ -3155,7 +3155,7 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 chat_id=user_id,
-                text=f"📢 *Рассылка:*\n\n{message_text}",
+                text=f"📢 *Новое сообщение:*\n\n{message_text}",
                 parse_mode='Markdown'
             )
             success_count += 1
@@ -3212,6 +3212,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
