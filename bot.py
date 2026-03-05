@@ -2342,7 +2342,7 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
         message_text
     )
     
-    # Отправляем подтверждение пользователю (без Markdown)
+    # Отправляем подтверждение пользователю
     await send_and_track(
         update, context,
         f"✅ Ваше обращение принято!\n\n"
@@ -2356,28 +2356,40 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
         [InlineKeyboardButton("✅ Закрыть", callback_data=f'admin_close_{ticket_id}')]
     ]
     
-    # Экранируем спецсимволы в имени пользователя и сообщении
-    # Простой способ - заменить потенциально опасные символы
-    safe_first_name = user.first_name.replace('_', ' ').replace('*', ' ').replace('`', ' ')
-    safe_username = f"@{user.username}" if user.username else "нет username"
-    safe_username = safe_username.replace('_', ' ').replace('*', ' ').replace('`', ' ')
-    safe_message = message_text.replace('_', ' ').replace('*', ' ').replace('`', ' ')
+    # Функция для очистки текста от Markdown символов
+    def clean_text(text):
+        if not text:
+            return ""
+        chars_to_replace = ['_', '*', '`', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+        for char in chars_to_replace:
+            text = text.replace(char, ' ')
+        return text
+    
+    # Очищаем все поля
+    clean_first_name = clean_text(user.first_name)
+    clean_username = clean_text(f"@{user.username}") if user.username else "нет username"
+    clean_message = clean_text(message_text)
     
     admin_message = (
         f"🆘 НОВОЕ ОБРАЩЕНИЕ В ПОДДЕРЖКУ\n\n"
         f"🆔 Тикет: {ticket_id}\n"
-        f"👤 Пользователь: {safe_first_name} ({safe_username})\n"
+        f"👤 Пользователь: {clean_first_name} ({clean_username})\n"
         f"🆔 User ID: {user.id}\n"
         f"📅 Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
-        f"📝 Сообщение:\n{safe_message}"
+        f"📝 Сообщение:\n{clean_message}"
     )
     
-    # Отправляем админу БЕЗ parse_mode
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=admin_message,
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    # ОТПРАВЛЯЕМ ВСЕМ АДМИНИСТРАТОРАМ
+    for admin_id in ADMINS:
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=admin_message,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            logger.info(f"📨 Уведомление о тикете {ticket_id} отправлено админу {admin_id}")
+        except Exception as e:
+            logger.error(f"❌ Не удалось отправить уведомление админу {admin_id}: {e}")
     
     context.user_data['awaiting_support_message'] = False
 
@@ -3805,6 +3817,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
