@@ -35,14 +35,107 @@ PERSONAL_ACCOUNT_URL = "https://partners-app.yandex.ru/team_ref/8647844ed8ee4d0e
 CALCULATOR_URL = "https://eda.yandex.ru/partner/perf/samara/?utm_medium=cpc&utm_source=yandex-hr&utm_campaign=%5BEDA%5DMX_Courier_RU-ALL-1M_Brand_search_NU%7C73792274&utm_term=49415175552%7C---autotargeting&utm_content=k50id%7C0100000049415175552_49415175552%7Ccid%7C73792274%7Cgid%7C5378729251%7Caid%7C15662855932%7Cadp%7Cno%7Cpos%7Cpremium1%7Csrc%7Csearch_none%7Cdvc%7Cdesktop%7Cmain&etext=2202.H1-umiWOxa1IhaqocPaUS69zT9wHAZdkgZEGqorPY5rJ_ebzkat1FDn2yZO3bEqDYssRPcp0IyJXzD9sTJXJ7293dG14ZXB1Z2VrdW1hemM.0d27564e0c3a01c61971ab0f3d5b481a3ae88ee1&yclid=14506292526793097215"
 
 # ========== ИЗОБРАЖЕНИЯ ==========
-# Прямые ссылки с ImgBB
 IMAGES = {
-    'test_required': 'https://i.ibb.co/yFQr7VHx/photo-2026-03-03-19-24-40-1.jpg',  # Начальное меню с тестом
-    'main_menu': 'https://i.ibb.co/5hQCccsB/photo-2026-03-03-19-24-49-1.jpg'       # Главное меню
+    'test_required': 'https://i.ibb.co/yFQr7VHx/photo-2026-03-03-19-24-40-1.jpg',
+    'main_menu': 'https://i.ibb.co/5hQCccsB/photo-2026-03-03-19-24-49-1.jpg'
 }
+
+# ========== ПОСТОЯННОЕ ХРАНЕНИЕ ДАННЫХ ==========
+DB_PATH = 'bot_database.db'
+BACKUP_FILE = 'backup.json'
+
+def get_db():
+    """Возвращает соединение с БД"""
+    try:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        # Включаем поддержку внешних ключей
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+    except Exception as e:
+        logger.error(f"❌ Ошибка подключения к БД: {e}")
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+
+def init_database():
+    """Инициализирует таблицы в БД"""
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Таблица пользователей
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (user_id INTEGER PRIMARY KEY,
+                  username TEXT,
+                  first_name TEXT,
+                  last_name TEXT,
+                  registration_date TEXT,
+                  balance REAL DEFAULT 0,
+                  test_passed INTEGER DEFAULT 0,
+                  test_attempts INTEGER DEFAULT 0,
+                  last_test_attempt TEXT)''')
+    
+    # Таблица заявок на вывод
+    c.execute('''CREATE TABLE IF NOT EXISTS withdrawals
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id INTEGER,
+                  amount REAL,
+                  payment_method TEXT,
+                  payment_details TEXT,
+                  status TEXT DEFAULT 'pending',
+                  request_date TEXT,
+                  completed_date TEXT,
+                  reject_reason TEXT,
+                  FOREIGN KEY (user_id) REFERENCES users(user_id))''')
+    
+    # Таблица тикетов поддержки
+    c.execute('''CREATE TABLE IF NOT EXISTS support_tickets
+                 (ticket_id TEXT PRIMARY KEY,
+                  user_id INTEGER,
+                  username TEXT,
+                  first_name TEXT,
+                  message TEXT,
+                  status TEXT DEFAULT 'open',
+                  created_at TEXT,
+                  answered_at TEXT,
+                  admin_reply TEXT,
+                  FOREIGN KEY (user_id) REFERENCES users(user_id))''')
+    
+    # Таблица курьеров
+    c.execute('''CREATE TABLE IF NOT EXISTS couriers
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  recruiter_id INTEGER,
+                  full_name TEXT,
+                  city TEXT,
+                  status TEXT DEFAULT 'pending',
+                  balance REAL DEFAULT 0,
+                  registered_at TEXT,
+                  confirmed_at TEXT,
+                  sheet_row INTEGER,
+                  FOREIGN KEY (recruiter_id) REFERENCES users(user_id))''')
+    
+    conn.commit()
+    logger.info("✅ Таблицы созданы/проверены")
+    
+    # Загружаем данные из Google Sheets при старте
+    try:
+        load_from_google_sheets()
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки из Google Sheets при старте: {e}")
+    
+    # Пересчитываем балансы
+    try:
+        logger.info("🔄 Пересчитываем балансы после загрузки...")
+        recalc_all_balances()
+    except Exception as e:
+        logger.error(f"❌ Ошибка при пересчете балансов: {e}")
+    
+    logger.info("✅ База данных инициализирована")
+
 # ========== ФУНКЦИИ ДЛЯ ПЕРЕСЧЕТА БАЛАНСОВ ==========
 def recalc_all_balances():
-    """Пересчитывает балансы всех пользователей (курьеры - выводы)"""
+    """Пересчитывает балансы всех пользователей"""
     try:
         conn = get_db()
         c = conn.cursor()
@@ -74,7 +167,7 @@ def recalc_all_balances():
             # Обновляем если отличается
             if current_balance != real_balance:
                 c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (real_balance, user_id))
-                logger.info(f"💰 Пользователь {user_id}: {current_balance} -> {real_balance} (курьеры: {couriers_sum}, выводы: {withdrawals_sum})")
+                logger.info(f"💰 Пользователь {user_id}: {current_balance} -> {real_balance}")
                 count += 1
         
         conn.commit()
@@ -84,175 +177,427 @@ def recalc_all_balances():
     except Exception as e:
         logger.error(f"❌ Ошибка при пересчете балансов: {e}")
         return 0
-# ========== ПОСТОЯННОЕ ХРАНЕНИЕ ДАННЫХ ==========
-DB_PATH = 'bot_database.db'
-BACKUP_FILE = 'backup.json'
 
-def get_db():
-    """Возвращает соединение с БД (ФАЙЛ, а не память!)"""
-    try:
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
-    except Exception as e:
-        logger.error(f"❌ Ошибка подключения к БД: {e}")
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
-
-def init_database():
-    """Инициализирует таблицы в БД"""
-    conn = get_db()
-    c = conn.cursor()
-    
-    # Таблица пользователей
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (user_id INTEGER PRIMARY KEY,
-                  username TEXT,
-                  first_name TEXT,
-                  last_name TEXT,
-                  registration_date TEXT,
-                  balance REAL DEFAULT 0,
-                  test_passed INTEGER DEFAULT 0,
-                  test_attempts INTEGER DEFAULT 0,
-                  last_test_attempt TEXT)''')
-    
-    # Таблица заявок на вывод
-    c.execute('''CREATE TABLE IF NOT EXISTS withdrawals
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  user_id INTEGER,
-                  amount REAL,
-                  payment_method TEXT,
-                  payment_details TEXT,
-                  status TEXT DEFAULT 'pending',
-                  request_date TEXT,
-                  completed_date TEXT,
-                  reject_reason TEXT)''')
-    
-    # Таблица тикетов поддержки
-    c.execute('''CREATE TABLE IF NOT EXISTS support_tickets
-                 (ticket_id TEXT PRIMARY KEY,
-                  user_id INTEGER,
-                  username TEXT,
-                  first_name TEXT,
-                  message TEXT,
-                  status TEXT DEFAULT 'open',
-                  created_at TEXT,
-                  answered_at TEXT,
-                  admin_reply TEXT)''')
-    
-    # Таблица курьеров
-    c.execute('''CREATE TABLE IF NOT EXISTS couriers
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  recruiter_id INTEGER,
-                  full_name TEXT,
-                  city TEXT,
-                  status TEXT DEFAULT 'pending',
-                  balance REAL DEFAULT 0,
-                  registered_at TEXT,
-                  confirmed_at TEXT,
-                  sheet_row INTEGER)''')
-    
-    conn.commit()
-    logger.info("✅ Таблицы созданы/проверены")
-    
-    # Загружаем данные из Google Sheets при старте
-    try:
-        load_from_google_sheets()
-    except Exception as e:
-        logger.error(f"❌ Ошибка загрузки из Google Sheets при старте: {e}")
-    
-    # ВАЖНО: Пересчитываем балансы после загрузки
-    try:
-        logger.info("🔄 Пересчитываем балансы после загрузки...")
-        recalc_all_balances()
-    except Exception as e:
-        logger.error(f"❌ Ошибка при пересчете балансов: {e}")
-    
-    logger.info("✅ База данных инициализирована")
-
-def backup_database():
-    """Сохраняет все данные в JSON файл"""
+def get_user_balance(user_id):
+    """Получает реальный баланс пользователя"""
     try:
         conn = get_db()
         c = conn.cursor()
         
-        backup = {
-            'users': c.execute("SELECT * FROM users").fetchall(),
-            'withdrawals': c.execute("SELECT * FROM withdrawals").fetchall(),
-            'support_tickets': c.execute("SELECT * FROM support_tickets").fetchall(),
-            'couriers': c.execute("SELECT * FROM couriers").fetchall(),
-            'timestamp': datetime.now().isoformat()
-        }
+        # Сумма всех курьеров
+        c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (user_id,))
+        couriers_sum = c.fetchone()[0] or 0
         
-        serializable_backup = {}
-        for key, rows in backup.items():
-            if key != 'timestamp':
-                serializable_backup[key] = [list(row) for row in rows]
-            else:
-                serializable_backup[key] = rows
+        # Сумма всех подтвержденных выводов
+        c.execute("SELECT SUM(amount) FROM withdrawals WHERE user_id = ? AND status = 'completed'", (user_id,))
+        withdrawals_sum = c.fetchone()[0] or 0
         
-        with open(BACKUP_FILE, 'w', encoding='utf-8') as f:
-            json.dump(serializable_backup, f, default=str, ensure_ascii=False, indent=2)
+        # Реальный баланс
+        real_balance = couriers_sum - withdrawals_sum
         
-        logger.info(f"💾 Автосохранение: {len(backup['users'])} users, {len(backup['couriers'])} couriers")
-        return True
+        # Обновляем баланс в таблице users
+        c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (real_balance, user_id))
+        conn.commit()
+        
+        logger.info(f"💰 Баланс пользователя {user_id}: {couriers_sum} - {withdrawals_sum} = {real_balance}")
+        return real_balance
+        
     except Exception as e:
-        logger.error(f"❌ Ошибка сохранения бэкапа: {e}")
+        logger.error(f"Ошибка в get_user_balance: {e}")
+        return 0
+
+# ========== ФУНКЦИИ ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕЙ ==========
+def is_registered(user_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+        result = c.fetchone()
+        return result is not None
+    except Exception as e:
+        logger.error(f"Ошибка в is_registered: {e}")
         return False
 
-def load_backup():
-    """Загружает данные из JSON файла"""
+def register_user(user_id, username, first_name, last_name):
     try:
-        if not os.path.exists(BACKUP_FILE):
-            logger.info("📭 Файл бэкапа не найден, начинаем с пустой БД")
-            return
-        
-        with open(BACKUP_FILE, 'r', encoding='utf-8') as f:
-            backup = json.load(f)
-        
+        conn = get_db()
+        c = conn.cursor()
+        registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("""INSERT OR IGNORE INTO users 
+                     (user_id, username, first_name, last_name, registration_date, balance, test_passed) 
+                     VALUES (?, ?, ?, ?, ?, 0, 0)""",
+                  (user_id, username, first_name, last_name, registration_date))
+        conn.commit()
+        logger.info(f"✅ Пользователь {user_id} зарегистрирован")
+    except Exception as e:
+        logger.error(f"Ошибка в register_user: {e}")
+
+def update_test_status(user_id, passed):
+    """Обновляет статус теста пользователя"""
+    try:
         conn = get_db()
         c = conn.cursor()
         
-        c.execute("DELETE FROM users")
-        c.execute("DELETE FROM withdrawals")
-        c.execute("DELETE FROM support_tickets")
-        c.execute("DELETE FROM couriers")
-        
-        for row in backup.get('users', []):
-            placeholders = ','.join(['?'] * len(row))
-            c.execute(f"INSERT OR REPLACE INTO users VALUES ({placeholders})", row)
-        
-        for row in backup.get('withdrawals', []):
-            placeholders = ','.join(['?'] * len(row))
-            c.execute(f"INSERT OR REPLACE INTO withdrawals VALUES ({placeholders})", row)
-        
-        for row in backup.get('support_tickets', []):
-            placeholders = ','.join(['?'] * len(row))
-            c.execute(f"INSERT OR REPLACE INTO support_tickets VALUES ({placeholders})", row)
-        
-        for row in backup.get('couriers', []):
-            placeholders = ','.join(['?'] * len(row))
-            c.execute(f"INSERT OR REPLACE INTO couriers VALUES ({placeholders})", row)
-        
+        c.execute("""UPDATE users 
+                     SET test_passed = ?, last_test_attempt = ? 
+                     WHERE user_id = ?""",
+                  (1 if passed else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
         conn.commit()
-        logger.info(f"✅ Загружено из бэкапа: {len(backup.get('users', []))} users, {len(backup.get('couriers', []))} couriers")
+        
+        c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
+        new_value = c.fetchone()[0]
+        logger.info(f"✅ Обновлен test_passed для {user_id} на {new_value}")
         
     except Exception as e:
-        logger.error(f"❌ Ошибка загрузки бэкапа: {e}")
+        logger.error(f"Ошибка в update_test_status: {e}")
 
-def start_auto_backup():
-    """Запускает автосохранение каждые 5 минут"""
-    def backup_worker():
-        while True:
-            time.sleep(300)
-            backup_database()
-    
-    thread = threading.Thread(target=backup_worker, daemon=True)
-    thread.start()
-    logger.info("✅ Автосохранение запущено (каждые 5 минут)")
+def can_take_test(user_id):
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT test_passed, last_test_attempt FROM users WHERE user_id = ?", (user_id,))
+        result = c.fetchone()
+        
+        if not result:
+            return True, 0
+        
+        test_passed, last_attempt_str = result
+        
+        if test_passed == 1:
+            return True, 0
+        
+        if last_attempt_str:
+            last_attempt = datetime.strptime(last_attempt_str, "%Y-%m-%d %H:%M:%S")
+            now = datetime.now()
+            time_diff = now - last_attempt
+            
+            if time_diff < timedelta(minutes=30):
+                remaining = 30 - int(time_diff.total_seconds() / 60)
+                return False, remaining
+        
+        return True, 0
+    except Exception as e:
+        logger.error(f"Ошибка в can_take_test: {e}")
+        return True, 0
 
-atexit.register(backup_database)
+# ========== ФУНКЦИИ ДЛЯ ВЫВОДА ==========
+def create_withdrawal_request(user_id, amount, method, details):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        # Проверяем баланс
+        real_balance = get_user_balance(user_id)
+        
+        if amount > real_balance:
+            logger.error(f"❌ Недостаточно средств: баланс {real_balance}, запрос {amount}")
+            return None
+        
+        request_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute('''INSERT INTO withdrawals 
+                     (user_id, amount, payment_method, payment_details, request_date, status) 
+                     VALUES (?, ?, ?, ?, ?, 'pending')''',
+                  (user_id, amount, method, details, request_date))
+        request_id = c.lastrowid
+        conn.commit()
+        
+        logger.info(f"💰 Заявка {request_id} создана для пользователя {user_id}")
+        
+        # Отправляем в Google Sheets в отдельном потоке
+        c.execute("SELECT username, first_name FROM users WHERE user_id = ?", (user_id,))
+        user = c.fetchone()
+        username = user[0] if user else None
+        first_name = user[1] if user else "Пользователь"
+        
+        def add_to_sheet_thread():
+            try:
+                add_withdrawal_to_sheet(user_id, username, first_name, amount, method, details, request_id)
+            except Exception as e:
+                logger.error(f"Ошибка в потоке добавления в Google Sheets: {e}")
+        
+        thread = threading.Thread(target=add_to_sheet_thread)
+        thread.start()
+        
+        return request_id
+    except Exception as e:
+        logger.error(f"Ошибка в create_withdrawal_request: {e}")
+        return None
+
+def get_pending_withdrawals():
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute('''SELECT w.id, w.user_id, u.first_name, u.username, 
+                            w.amount, w.payment_method, w.payment_details, w.request_date
+                     FROM withdrawals w
+                     JOIN users u ON w.user_id = u.user_id
+                     WHERE w.status = 'pending'
+                     ORDER BY w.request_date ASC''')
+        return c.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка в get_pending_withdrawals: {e}")
+        return []
+
+def get_all_withdrawals(limit=50):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute('''SELECT w.id, w.user_id, u.first_name, u.username, 
+                            w.amount, w.payment_method, w.payment_details, w.status, w.request_date, w.completed_date, w.reject_reason
+                     FROM withdrawals w
+                     JOIN users u ON w.user_id = u.user_id
+                     ORDER BY w.request_date DESC
+                     LIMIT ?''', (limit,))
+        return c.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка в get_all_withdrawals: {e}")
+        return []
+
+def get_withdrawal_by_id(request_id):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute('''SELECT w.id, w.user_id, u.first_name, u.username, 
+                            w.amount, w.payment_method, w.payment_details, w.status, w.request_date
+                     FROM withdrawals w
+                     JOIN users u ON w.user_id = u.user_id
+                     WHERE w.id = ?''', (request_id,))
+        return c.fetchone()
+    except Exception as e:
+        logger.error(f"Ошибка в get_withdrawal_by_id: {e}")
+        return None
+
+async def confirm_withdrawal(request_id, context):
+    """Подтверждает вывод средств"""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        c.execute('''SELECT user_id, amount FROM withdrawals WHERE id = ? AND status = 'pending' ''', (request_id,))
+        withdrawal = c.fetchone()
+        
+        if not withdrawal:
+            logger.error(f"❌ Заявка {request_id} не найдена или уже обработана")
+            return False, None, None
+        
+        user_id, amount = withdrawal
+        
+        completed_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("UPDATE withdrawals SET status = 'completed', completed_date = ? WHERE id = ?", 
+                  (completed_date, request_id))
+        
+        conn.commit()
+        
+        # Пересчитываем баланс пользователя
+        new_balance = get_user_balance(user_id)
+        
+        logger.info(f"✅ Подтвержден вывод {amount} для пользователя {user_id}. Новый баланс: {new_balance}")
+        
+        def update_sheet_thread():
+            try:
+                update_withdrawal_status_in_sheet(request_id, user_id, amount, "✅ Подтвержден", 
+                                                 datetime.now().strftime("%d.%m.%Y %H:%M"))
+            except Exception as e:
+                logger.error(f"Ошибка обновления статуса в Google Sheets: {e}")
+        
+        thread = threading.Thread(target=update_sheet_thread)
+        thread.start()
+        
+        return True, user_id, amount
+        
+    except Exception as e:
+        logger.error(f"Ошибка в confirm_withdrawal: {e}")
+        return False, None, None
+
+async def reject_withdrawal(request_id, reason, context):
+    """Отклоняет вывод средств"""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        c.execute('''SELECT user_id, amount FROM withdrawals WHERE id = ? AND status = 'pending' ''', (request_id,))
+        withdrawal = c.fetchone()
+        
+        if not withdrawal:
+            logger.error(f"❌ Заявка {request_id} не найдена или уже обработана")
+            return False, None, None
+        
+        user_id, amount = withdrawal
+        
+        completed_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("UPDATE withdrawals SET status = 'rejected', completed_date = ?, reject_reason = ? WHERE id = ?", 
+                  (completed_date, reason, request_id))
+        
+        conn.commit()
+        
+        # Баланс не меняется при отказе
+        current_balance = get_user_balance(user_id)
+        
+        logger.info(f"❌ Отклонен вывод {amount} для пользователя {user_id}. Причина: {reason}")
+        
+        def update_sheet_thread():
+            try:
+                update_withdrawal_status_in_sheet(request_id, user_id, amount, "❌ Отклонен", 
+                                                 datetime.now().strftime("%d.%m.%Y %H:%M"))
+            except Exception as e:
+                logger.error(f"Ошибка обновления статуса в Google Sheets: {e}")
+        
+        thread = threading.Thread(target=update_sheet_thread)
+        thread.start()
+        
+        return True, user_id, amount
+        
+    except Exception as e:
+        logger.error(f"Ошибка в reject_withdrawal: {e}")
+        return False, None, None
+
+# ========== ФУНКЦИИ ПОДДЕРЖКИ ==========
+def create_support_ticket(user_id, username, first_name, message):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        ticket_id = str(uuid.uuid4())[:8]
+        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute('''INSERT INTO support_tickets 
+                     (ticket_id, user_id, username, first_name, message, created_at) 
+                     VALUES (?, ?, ?, ?, ?, ?)''',
+                  (ticket_id, user_id, username, first_name, message, created_at))
+        conn.commit()
+        return ticket_id
+    except Exception as e:
+        logger.error(f"Ошибка в create_support_ticket: {e}")
+        return None
+
+def get_open_tickets():
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute('''SELECT ticket_id, user_id, username, first_name, message, created_at 
+                     FROM support_tickets 
+                     WHERE status = 'open' 
+                     ORDER BY created_at ASC''')
+        return c.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка в get_open_tickets: {e}")
+        return []
+
+def get_all_tickets(limit=50):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute('''SELECT ticket_id, user_id, username, first_name, message, status, created_at, answered_at, admin_reply
+                     FROM support_tickets 
+                     ORDER BY created_at DESC
+                     LIMIT ?''', (limit,))
+        return c.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка в get_all_tickets: {e}")
+        return []
+
+def get_ticket(ticket_id):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        c.execute('''SELECT * FROM support_tickets WHERE ticket_id = ?''', (ticket_id,))
+        return c.fetchone()
+    except Exception as e:
+        logger.error(f"Ошибка в get_ticket: {e}")
+        return None
+
+def close_ticket(ticket_id, admin_reply):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        answered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute('''UPDATE support_tickets 
+                     SET status = 'closed', answered_at = ?, admin_reply = ? 
+                     WHERE ticket_id = ?''',
+                  (answered_at, admin_reply, ticket_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка в close_ticket: {e}")
+        return False
+
+# ========== ФУНКЦИИ ДЛЯ КУРЬЕРОВ ==========
+def add_courier(recruiter_id, recruiter_username, recruiter_name, full_name, city):
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        # Проверяем существование пользователя
+        c.execute("SELECT * FROM users WHERE user_id = ?", (recruiter_id,))
+        user = c.fetchone()
+        if not user:
+            registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            c.execute("""
+                INSERT INTO users 
+                (user_id, username, first_name, last_name, registration_date, balance, test_passed) 
+                VALUES (?, ?, ?, ?, ?, 0, 0)
+            """, (recruiter_id, recruiter_username, recruiter_name, "", registration_date))
+            conn.commit()
+            logger.info(f"✅ Пользователь {recruiter_id} создан")
+        
+        # Проверяем существование курьера
+        c.execute('''SELECT id FROM couriers 
+                     WHERE recruiter_id = ? AND full_name = ? AND city = ? AND status = 'confirmed' ''',
+                  (recruiter_id, full_name, city))
+        exists = c.fetchone()
+        
+        if exists:
+            logger.info(f"⚠️ Курьер уже существует с id={exists[0]}")
+            return False, "Курьер с такими данными уже подтвержден"
+        
+        registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute('''INSERT INTO couriers 
+                     (recruiter_id, full_name, city, status, registered_at)
+                     VALUES (?, ?, ?, ?, ?)''',
+                  (recruiter_id, full_name, city, 'pending', registered_at))
+        conn.commit()
+        
+        courier_id = c.lastrowid
+        logger.info(f"✅ Курьер добавлен с ID: {courier_id}")
+        
+        # Обновляем баланс рекрутера
+        get_user_balance(recruiter_id)
+        
+        # Добавляем в Google Sheets в отдельном потоке
+        def add_to_sheet_thread():
+            try:
+                success, row_number = add_courier_to_google_sheet(
+                    recruiter_name, recruiter_username, full_name, city
+                )
+                if success and row_number:
+                    conn2 = get_db()
+                    c2 = conn2.cursor()
+                    c2.execute('''UPDATE couriers SET sheet_row = ? WHERE id = ?''', (row_number, courier_id))
+                    conn2.commit()
+                    conn2.close()
+                    logger.info(f"✅ Курьер {full_name} добавлен в Google Sheets, строка: {row_number}")
+            except Exception as e:
+                logger.error(f"Ошибка в потоке добавления в Google Sheets: {e}")
+        
+        thread = threading.Thread(target=add_to_sheet_thread)
+        thread.start()
+        
+        return True, "Заявка на курьера отправлена на проверку! ✅"
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка в add_courier: {e}")
+        traceback.print_exc()
+        return False, f"Ошибка: {str(e)}"
+
+def get_recruiter_couriers(recruiter_id):
+    """Получает всех курьеров рекрутера"""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('''SELECT full_name, city, status, registered_at, confirmed_at, balance 
+                     FROM couriers 
+                     WHERE recruiter_id = ? 
+                     ORDER BY registered_at DESC''', (recruiter_id,))
+        return c.fetchall()
+    except Exception as e:
+        logger.error(f"Ошибка в get_recruiter_couriers: {e}")
+        return []
 
 # ========== GOOGLE SHEETS ИНТЕГРАЦИЯ ==========
 def get_google_sheet():
@@ -415,7 +760,7 @@ def update_courier_status_in_sheet(sheet_row, status_text):
         return False
 
 def check_pending_couriers():
-    """Проверяет статусы курьеров в Google Sheets и синхронизирует с БД в обе стороны"""
+    """Проверяет статусы курьеров в Google Sheets и синхронизирует с БД"""
     try:
         sheet = get_google_sheet()
         if not sheet:
@@ -431,8 +776,6 @@ def check_pending_couriers():
         updated_count = 0
         new_count = 0
         balance_updated_count = 0
-        sheet_updated_count = 0
-        recruiter_balances = {}
         
         for i, record in enumerate(records):
             try:
@@ -457,7 +800,6 @@ def check_pending_couriers():
                         balance = 0.0
                 except Exception as e:
                     balance = 0.0
-                    logger.warning(f"   ⚠️ Ошибка преобразования баланса '{balance_raw}': {e}")
                 
                 sheet_row = i + 2
                 
@@ -465,14 +807,11 @@ def check_pending_couriers():
                     continue
                 
                 new_status = None
-                new_status_text = None
                 
                 if accepted in ['1', 'true', 'True', 'TRUE', 'yes', 'Yes', 'YES', '✅', '☑']:
                     new_status = 'confirmed'
-                    new_status_text = "✅ Подтвержден"
                 elif rejected in ['1', 'true', 'True', 'TRUE', 'yes', 'Yes', 'YES', '❌']:
                     new_status = 'rejected'
-                    new_status_text = "❌ Отклонен"
                 else:
                     if 'Подтвержден' in status_text or '✅' in status_text or '☑' in status_text:
                         new_status = 'confirmed'
@@ -480,24 +819,22 @@ def check_pending_couriers():
                         new_status = 'rejected'
                     else:
                         new_status = 'pending'
-                        new_status_text = "⏳ Ожидает"
                 
+                # Находим рекрутера
                 recruiter_id = None
                 if recruiter_username:
                     c.execute("SELECT user_id FROM users WHERE username = ?", (recruiter_username,))
                     user = c.fetchone()
                     if user:
                         recruiter_id = user[0]
-                        logger.info(f"   👤 Найден рекрутер @{recruiter_username} с ID {recruiter_id}")
                 
-                if not recruiter_id and recruiter_username in ['unknownsorcerer', 'costa', 'user_860845946']:
+                if not recruiter_id and recruiter_username in ['unknownsorcerer', 'costa']:
                     recruiter_id = ADMIN_ID
-                    logger.info(f"   👤 Принудительно привязываем к админу (ID: {ADMIN_ID})")
                 
                 if not recruiter_id:
-                    logger.warning(f"⚠️ Курьер {full_name} пропущен - рекрутер не найден")
                     continue
                 
+                # Ищем курьера в БД
                 c.execute('''SELECT id, status, sheet_row, balance FROM couriers 
                              WHERE full_name = ? AND city = ? ORDER BY id DESC LIMIT 1''',
                           (full_name, city))
@@ -516,21 +853,21 @@ def check_pending_couriers():
                         updated_count += 1
                         logger.info(f"🔄 Обновлен статус в БД: {full_name}: {existing_status} -> {new_status}")
                         
-                        if new_status_text and existing_sheet_row:
-                            update_courier_status_in_sheet(existing_sheet_row, new_status_text)
-                            sheet_updated_count += 1
+                        status_text_map = {
+                            'confirmed': "✅ Подтвержден",
+                            'rejected': "❌ Отклонен",
+                            'pending': "⏳ Ожидает"
+                        }
+                        if existing_sheet_row:
+                            update_courier_status_in_sheet(existing_sheet_row, status_text_map.get(new_status, "⏳ Ожидает"))
                     
                     if existing_balance != balance:
                         c.execute("UPDATE couriers SET balance = ? WHERE id = ?", (balance, existing_id))
                         balance_updated_count += 1
                         logger.info(f"💰 Обновлен баланс курьера {full_name}: {existing_balance} -> {balance}")
-                        
-                        if recruiter_id not in recruiter_balances:
-                            recruiter_balances[recruiter_id] = 0
                     
                     if existing_sheet_row != sheet_row:
                         c.execute("UPDATE couriers SET sheet_row = ? WHERE id = ?", (sheet_row, existing_id))
-                        logger.info(f"📝 Обновлен номер строки для {full_name}: {existing_sheet_row} -> {sheet_row}")
                 
                 else:
                     registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -541,62 +878,25 @@ def check_pending_couriers():
                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
                               (recruiter_id, full_name, city, new_status, balance, registered_at, confirmed_at, sheet_row))
                     new_count += 1
-                    logger.info(f"✅ Добавлен новый курьер в БД: {full_name} (статус: {new_status}, баланс: {balance})")
-                    
-                    if recruiter_id not in recruiter_balances:
-                        recruiter_balances[recruiter_id] = 0
-                    
-                    if new_status_text:
-                        update_courier_status_in_sheet(sheet_row, new_status_text)
-                        sheet_updated_count += 1
+                    logger.info(f"✅ Добавлен новый курьер в БД: {full_name}")
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка при обработке строки {i+2}: {e}")
-                logger.error(traceback.format_exc())
                 continue
-        
-        # Пересчитываем балансы для ВСЕХ пользователей (не только с курьерами)
-        logger.info("🔄 Пересчитываем балансы всех пользователей...")
-        
-        c.execute("SELECT user_id FROM users")
-        all_users = c.fetchall()
-        
-        balance_recalc_count = 0
-        for user in all_users:
-            user_id = user[0]
-            
-            # Сумма всех курьеров
-            c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (user_id,))
-            couriers_sum = c.fetchone()[0] or 0
-            
-            # Сумма всех подтвержденных выводов
-            c.execute("SELECT SUM(amount) FROM withdrawals WHERE user_id = ? AND status = 'completed'", (user_id,))
-            withdrawals_sum = c.fetchone()[0] or 0
-            
-            # Реальный баланс
-            real_balance = couriers_sum - withdrawals_sum
-            
-            # Получаем текущий баланс
-            c.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-            current_balance = c.fetchone()[0] or 0
-            
-            # Обновляем если отличается
-            if current_balance != real_balance:
-                c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (real_balance, user_id))
-                logger.info(f"   👤 Пользователь {user_id}: {current_balance} -> {real_balance} (курьеры: {couriers_sum}, выводы: {withdrawals_sum})")
-                balance_recalc_count += 1
         
         conn.commit()
         
+        # Пересчитываем балансы всех пользователей
+        logger.info("🔄 Пересчитываем балансы всех пользователей...")
+        recalc_all_balances()
+        
         logger.info(f"📊 ИТОГИ СИНХРОНИЗАЦИИ:")
-        logger.info(f"   • Обновлено статусов в БД: {updated_count}")
-        logger.info(f"   • Обновлено балансов курьеров: {balance_updated_count}")
-        logger.info(f"   • Добавлено новых курьеров: {new_count}")
-        logger.info(f"   • Обновлено в таблице: {sheet_updated_count}")
-        logger.info(f"   • Исправлено балансов пользователей: {balance_recalc_count}")
+        logger.info(f"   • Обновлено статусов: {updated_count}")
+        logger.info(f"   • Добавлено новых: {new_count}")
+        logger.info(f"   • Обновлено балансов: {balance_updated_count}")
         
     except Exception as e:
-        logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА В check_pending_couriers: {e}")
+        logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
         logger.error(traceback.format_exc())
 
 def load_from_google_sheets():
@@ -654,11 +954,9 @@ def load_from_google_sheets():
                     user = c.fetchone()
                     if user:
                         recruiter_id = user[0]
-                        logger.info(f"   👤 Найден рекрутер @{recruiter_username} с ID {recruiter_id}")
                 
-                if not recruiter_id and (recruiter_username == "unknownsorcerer" or "costa" in recruiter_username.lower()):
+                if not recruiter_id and recruiter_username in ["unknownsorcerer", "costa"]:
                     recruiter_id = ADMIN_ID
-                    logger.info(f"   👤 Принудительно привязываем к админу (ID: {ADMIN_ID})")
                 
                 if recruiter_id:
                     c.execute('''SELECT id, status, balance FROM couriers 
@@ -681,10 +979,6 @@ def load_from_google_sheets():
                                 SET confirmed_at = ? 
                                 WHERE id = ?
                             ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), existing_id))
-                            logger.info(f"   ✅ Курьер {full_name} подтвержден, обновлена дата")
-                        
-                        if existing_balance != balance:
-                            logger.info(f"   💰 Баланс курьера {full_name} обновлен: {existing_balance} -> {balance}")
                     else:
                         registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         confirmed_at = registered_at if status == 'confirmed' else None
@@ -695,43 +989,92 @@ def load_from_google_sheets():
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         ''', (recruiter_id, full_name, city, status, balance, registered_at, confirmed_at, i + 2))
                         new_count += 1
-                        logger.info(f"   ✅ Добавлен новый курьер: {full_name}")
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка при обработке строки {i+2}: {e}")
-                logger.error(traceback.format_exc())
                 continue
         
         conn.commit()
         
-        logger.info("🔄 Пересчитываем балансы всех рекрутеров...")
-        c.execute("SELECT DISTINCT recruiter_id FROM couriers WHERE recruiter_id IS NOT NULL")
-        recruiters = c.fetchall()
-        
-        balance_updated_count = 0
-        for recruiter in recruiters:
-            recruiter_id = recruiter[0]
-            
-            c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (recruiter_id,))
-            couriers_sum = c.fetchone()[0] or 0
-            
-            c.execute("SELECT SUM(amount) FROM withdrawals WHERE user_id = ? AND status = 'completed'", (recruiter_id,))
-            withdrawals_sum = c.fetchone()[0] or 0
-            
-            real_balance = couriers_sum - withdrawals_sum
-            
-            c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (real_balance, recruiter_id))
-            balance_updated_count += 1
-            logger.info(f"   👤 Баланс рекрутера {recruiter_id} обновлен: {real_balance}")
-        
-        conn.commit()
-        
         logger.info(f"✅ Загружено из Google Sheets: {new_count} новых, {updated_count} обновлено")
-        logger.info(f"✅ Обновлены балансы для {balance_updated_count} рекрутеров")
         
     except Exception as e:
         logger.error(f"❌ Ошибка загрузки из Google Sheets: {e}")
         logger.error(traceback.format_exc())
+
+def backup_database():
+    """Сохраняет все данные в JSON файл"""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        backup = {
+            'users': [dict(row) for row in c.execute("SELECT * FROM users").fetchall()],
+            'withdrawals': [dict(row) for row in c.execute("SELECT * FROM withdrawals").fetchall()],
+            'support_tickets': [dict(row) for row in c.execute("SELECT * FROM support_tickets").fetchall()],
+            'couriers': [dict(row) for row in c.execute("SELECT * FROM couriers").fetchall()],
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        with open(BACKUP_FILE, 'w', encoding='utf-8') as f:
+            json.dump(backup, f, default=str, ensure_ascii=False, indent=2)
+        
+        logger.info(f"💾 Автосохранение: {len(backup['users'])} users, {len(backup['couriers'])} couriers")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения бэкапа: {e}")
+        return False
+
+def load_backup():
+    """Загружает данные из JSON файла"""
+    try:
+        if not os.path.exists(BACKUP_FILE):
+            logger.info("📭 Файл бэкапа не найден, начинаем с пустой БД")
+            return
+        
+        with open(BACKUP_FILE, 'r', encoding='utf-8') as f:
+            backup = json.load(f)
+        
+        conn = get_db()
+        c = conn.cursor()
+        
+        c.execute("DELETE FROM users")
+        c.execute("DELETE FROM withdrawals")
+        c.execute("DELETE FROM support_tickets")
+        c.execute("DELETE FROM couriers")
+        
+        for row in backup.get('users', []):
+            placeholders = ','.join(['?'] * len(row))
+            c.execute(f"INSERT INTO users VALUES ({placeholders})", list(row.values()))
+        
+        for row in backup.get('withdrawals', []):
+            placeholders = ','.join(['?'] * len(row))
+            c.execute(f"INSERT INTO withdrawals VALUES ({placeholders})", list(row.values()))
+        
+        for row in backup.get('support_tickets', []):
+            placeholders = ','.join(['?'] * len(row))
+            c.execute(f"INSERT INTO support_tickets VALUES ({placeholders})", list(row.values()))
+        
+        for row in backup.get('couriers', []):
+            placeholders = ','.join(['?'] * len(row))
+            c.execute(f"INSERT INTO couriers VALUES ({placeholders})", list(row.values()))
+        
+        conn.commit()
+        logger.info(f"✅ Загружено из бэкапа: {len(backup.get('users', []))} users, {len(backup.get('couriers', []))} couriers")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки бэкапа: {e}")
+
+def start_auto_backup():
+    """Запускает автосохранение каждые 5 минут"""
+    def backup_worker():
+        while True:
+            time.sleep(300)
+            backup_database()
+    
+    thread = threading.Thread(target=backup_worker, daemon=True)
+    thread.start()
+    logger.info("✅ Автосохранение запущено (каждые 5 минут)")
 
 def start_sheet_monitoring():
     """Запускает мониторинг Google Sheets в фоне"""
@@ -748,85 +1091,7 @@ def start_sheet_monitoring():
     thread.start()
     logger.info("✅ Мониторинг Google Sheets запущен (интервал 5 минут)")
 
-# ========== ФУНКЦИИ ПРОВЕРКИ ПОЛЬЗОВАТЕЛЕЙ ==========
-def is_registered(user_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
-        result = c.fetchone()
-        return result is not None
-    except Exception as e:
-        logger.error(f"Ошибка в is_registered: {e}")
-        return False
-def register_user(user_id, username, first_name, last_name):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        c.execute("""INSERT OR IGNORE INTO users 
-                     (user_id, username, first_name, last_name, registration_date, balance, test_passed) 
-                     VALUES (?, ?, ?, ?, ?, 0, 0)""",
-                  (user_id, username, first_name, last_name, registration_date))
-        conn.commit()
-        logger.info(f"✅ Пользователь {user_id} зарегистрирован")
-    except Exception as e:
-        logger.error(f"Ошибка в register_user: {e}")
-def update_test_status(user_id, passed):
-    """Обновляет статус теста пользователя"""
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        
-        # Проверяем, есть ли пользователь
-        c.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
-        if not c.fetchone():
-            logger.warning(f"⚠️ Пользователь {user_id} не найден в БД")
-            return
-        
-        # Обновляем статус
-        c.execute("""UPDATE users 
-                     SET test_passed = ?, last_test_attempt = ? 
-                     WHERE user_id = ?""",
-                  (1 if passed else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
-        conn.commit()
-        
-        # Проверяем, что обновилось
-        c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
-        new_value = c.fetchone()[0]
-        logger.info(f"✅ Обновлен test_passed для user_id={user_id} на {new_value}")
-        
-    except Exception as e:
-        logger.error(f"Ошибка в update_test_status: {e}")
-
-def can_take_test(user_id):
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT test_passed, last_test_attempt FROM users WHERE user_id = ?", (user_id,))
-        result = c.fetchone()
-        
-        if not result:
-            return True, 0
-        
-        test_passed, last_attempt_str = result
-        
-        if test_passed == 1:
-            return True, 0
-        
-        if last_attempt_str:
-            last_attempt = datetime.strptime(last_attempt_str, "%Y-%m-%d %H:%M:%S")
-            now = datetime.now()
-            time_diff = now - last_attempt
-            
-            if time_diff < timedelta(minutes=30):
-                remaining = 30 - int(time_diff.total_seconds() / 60)
-                return False, remaining
-        
-        return True, 0
-    except Exception as e:
-        logger.error(f"Ошибка в can_take_test: {e}")
-        return True, 0
+atexit.register(backup_database)
 
 # ========== ТЕСТОВЫЕ ВОПРОСЫ ==========
 TEST_QUESTIONS = [
@@ -1031,360 +1296,6 @@ async def send_menu_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, me
     
     return None
 
-# ========== ФУНКЦИИ ПОДДЕРЖКИ ==========
-def create_support_ticket(user_id, username, first_name, message):
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        ticket_id = str(uuid.uuid4())[:8]
-        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        c.execute('''INSERT INTO support_tickets 
-                     (ticket_id, user_id, username, first_name, message, created_at) 
-                     VALUES (?, ?, ?, ?, ?, ?)''',
-                  (ticket_id, user_id, username, first_name, message, created_at))
-        conn.commit()
-        return ticket_id
-    except Exception as e:
-        logger.error(f"Ошибка в create_support_ticket: {e}")
-        return None
-
-def get_open_tickets():
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        c.execute('''SELECT ticket_id, user_id, username, first_name, message, created_at 
-                     FROM support_tickets 
-                     WHERE status = 'open' 
-                     ORDER BY created_at ASC''')
-        return c.fetchall()
-    except Exception as e:
-        logger.error(f"Ошибка в get_open_tickets: {e}")
-        return []
-
-def get_all_tickets(limit=50):
-    """Получает все тикеты поддержки"""
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        c.execute('''SELECT ticket_id, user_id, username, first_name, message, status, created_at, answered_at, admin_reply
-                     FROM support_tickets 
-                     ORDER BY created_at DESC
-                     LIMIT ?''', (limit,))
-        return c.fetchall()
-    except Exception as e:
-        logger.error(f"Ошибка в get_all_tickets: {e}")
-        return []
-
-def get_ticket(ticket_id):
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        c.execute('''SELECT * FROM support_tickets WHERE ticket_id = ?''', (ticket_id,))
-        return c.fetchone()
-    except Exception as e:
-        logger.error(f"Ошибка в get_ticket: {e}")
-        return None
-
-def close_ticket(ticket_id, admin_reply):
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        answered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        c.execute('''UPDATE support_tickets 
-                     SET status = 'closed', answered_at = ?, admin_reply = ? 
-                     WHERE ticket_id = ?''',
-                  (answered_at, admin_reply, ticket_id))
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка в close_ticket: {e}")
-        return False
-
-# ========== ФУНКЦИИ ДЛЯ ВЫВОДА ==========
-def get_user_balance(user_id):
-    """Получает реальный баланс пользователя (сумма курьеров - сумма выводов)"""
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        
-        # Сумма всех курьеров
-        c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (user_id,))
-        couriers_sum = c.fetchone()[0] or 0
-        
-        # Сумма всех подтвержденных выводов
-        c.execute("SELECT SUM(amount) FROM withdrawals WHERE user_id = ? AND status = 'completed'", (user_id,))
-        withdrawals_sum = c.fetchone()[0] or 0
-        
-        # Реальный баланс
-        real_balance = couriers_sum - withdrawals_sum
-        
-        # Обновляем баланс в таблице users для консистентности
-        c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (real_balance, user_id))
-        conn.commit()
-        
-        logger.info(f"💰 Баланс пользователя {user_id}: {couriers_sum} (курьеры) - {withdrawals_sum} (выводы) = {real_balance}")
-        return real_balance
-        
-    except Exception as e:
-        logger.error(f"Ошибка в get_user_balance: {e}")
-        return 0
-
-def create_withdrawal_request(user_id, amount, method, details):
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        couriers_sum = c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (user_id,)).fetchone()[0] or 0
-        withdrawals_sum = c.execute("SELECT SUM(amount) FROM withdrawals WHERE user_id = ? AND status = 'completed'", (user_id,)).fetchone()[0] or 0
-        real_balance = couriers_sum - withdrawals_sum
-        
-        if amount > real_balance:
-            logger.error(f"❌ Недостаточно средств: баланс {real_balance}, запрос {amount}")
-            return None
-        
-        request_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        c.execute('''INSERT INTO withdrawals 
-                     (user_id, amount, payment_method, payment_details, request_date, status) 
-                     VALUES (?, ?, ?, ?, ?, 'pending')''',
-                  (user_id, amount, method, details, request_date))
-        request_id = c.lastrowid
-        conn.commit()
-        
-        c.execute("SELECT username, first_name FROM users WHERE user_id = ?", (user_id,))
-        user = c.fetchone()
-        username = user[0] if user else None
-        first_name = user[1] if user else "Пользователь"
-        
-        def add_to_sheet_thread():
-            try:
-                add_withdrawal_to_sheet(user_id, username, first_name, amount, method, details, request_id)
-            except Exception as e:
-                logger.error(f"Ошибка в потоке добавления в Google Sheets: {e}")
-        
-        thread = threading.Thread(target=add_to_sheet_thread)
-        thread.start()
-        
-        new_balance = couriers_sum - withdrawals_sum
-        logger.info(f"💰 Заявка создана, баланс пользователя {user_id}: {new_balance} (не изменился)")
-        
-        return request_id
-    except Exception as e:
-        logger.error(f"Ошибка в create_withdrawal_request: {e}")
-        return None
-
-def get_pending_withdrawals():
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        c.execute('''SELECT w.id, w.user_id, u.first_name, u.username, 
-                            w.amount, w.payment_method, w.payment_details, w.request_date
-                     FROM withdrawals w
-                     JOIN users u ON w.user_id = u.user_id
-                     WHERE w.status = 'pending'
-                     ORDER BY w.request_date ASC''')
-        return c.fetchall()
-    except Exception as e:
-        logger.error(f"Ошибка в get_pending_withdrawals: {e}")
-        return []
-
-def get_all_withdrawals(limit=50):
-    """Получает все заявки на вывод"""
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        c.execute('''SELECT w.id, w.user_id, u.first_name, u.username, 
-                            w.amount, w.payment_method, w.payment_details, w.status, w.request_date, w.completed_date, w.reject_reason
-                     FROM withdrawals w
-                     JOIN users u ON w.user_id = u.user_id
-                     ORDER BY w.request_date DESC
-                     LIMIT ?''', (limit,))
-        return c.fetchall()
-    except Exception as e:
-        logger.error(f"Ошибка в get_all_withdrawals: {e}")
-        return []
-
-def get_withdrawal_by_id(request_id):
-    """Получает заявку по ID"""
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        c.execute('''SELECT w.id, w.user_id, u.first_name, u.username, 
-                            w.amount, w.payment_method, w.payment_details, w.status, w.request_date
-                     FROM withdrawals w
-                     JOIN users u ON w.user_id = u.user_id
-                     WHERE w.id = ?''', (request_id,))
-        return c.fetchone()
-    except Exception as e:
-        logger.error(f"Ошибка в get_withdrawal_by_id: {e}")
-        return None
-
-async def confirm_withdrawal(request_id, context):
-    """Подтверждает вывод средств"""
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        
-        c.execute('''SELECT user_id, amount FROM withdrawals WHERE id = ? AND status = 'pending' ''', (request_id,))
-        withdrawal = c.fetchone()
-        
-        if not withdrawal:
-            logger.error(f"❌ Заявка {request_id} не найдена или уже обработана")
-            return False, None, None
-        
-        user_id, amount = withdrawal
-        
-        completed_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        c.execute("UPDATE withdrawals SET status = 'completed', completed_date = ? WHERE id = ?", 
-                  (completed_date, request_id))
-        
-        conn.commit()
-        
-        # Пересчитываем балансы после подтверждения
-        recalc_all_balances()
-        
-        new_balance = get_user_balance(user_id)
-        
-        logger.info(f"✅ Подтвержден вывод {amount} для пользователя {user_id}. Новый баланс: {new_balance}")
-        
-        def update_sheet_thread():
-            try:
-                update_withdrawal_status_in_sheet(request_id, user_id, amount, "✅ Подтвержден", 
-                                                 datetime.now().strftime("%d.%m.%Y %H:%M"))
-            except Exception as e:
-                logger.error(f"Ошибка обновления статуса в Google Sheets: {e}")
-        
-        thread = threading.Thread(target=update_sheet_thread)
-        thread.start()
-        
-        return True, user_id, amount
-        
-    except Exception as e:
-        logger.error(f"Ошибка в confirm_withdrawal: {e}")
-        return False, None, None
-
-async def reject_withdrawal(request_id, reason, context):
-    """Отклоняет вывод средств"""
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        
-        c.execute('''SELECT user_id, amount FROM withdrawals WHERE id = ? AND status = 'pending' ''', (request_id,))
-        withdrawal = c.fetchone()
-        
-        if not withdrawal:
-            logger.error(f"❌ Заявка {request_id} не найдена или уже обработана")
-            return False, None, None
-        
-        user_id, amount = withdrawal
-        
-        completed_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        c.execute("UPDATE withdrawals SET status = 'rejected', completed_date = ?, reject_reason = ? WHERE id = ?", 
-                  (completed_date, reason, request_id))
-        
-        conn.commit()
-        
-        # Пересчитываем балансы после отказа
-        recalc_all_balances()
-        
-        new_balance = get_user_balance(user_id)
-        
-        logger.info(f"❌ Отклонен вывод {amount} для пользователя {user_id}. Причина: {reason}. Баланс: {new_balance}")
-        
-        def update_sheet_thread():
-            try:
-                update_withdrawal_status_in_sheet(request_id, user_id, amount, "❌ Отклонен", 
-                                                 datetime.now().strftime("%d.%m.%Y %H:%M"))
-            except Exception as e:
-                logger.error(f"Ошибка обновления статуса в Google Sheets: {e}")
-        
-        thread = threading.Thread(target=update_sheet_thread)
-        thread.start()
-        
-        return True, user_id, amount
-        
-    except Exception as e:
-        logger.error(f"Ошибка в reject_withdrawal: {e}")
-        return False, None, None
-
-# ========== ФУНКЦИИ ДЛЯ КУРЬЕРОВ ==========
-def add_courier(recruiter_id, recruiter_username, recruiter_name, full_name, city):
-    logger.info("="*50)
-    logger.info("🔥🔥🔥 ADD_COURIER ВЫЗВАНА!")
-    logger.info(f"  recruiter_id: {recruiter_id}")
-    logger.info(f"  recruiter_username: {recruiter_username}")
-    logger.info(f"  recruiter_name: {recruiter_name}")
-    logger.info(f"  full_name: {full_name}")
-    logger.info(f"  city: {city}")
-    logger.info("="*50)
-    
-    conn = get_db()
-    c = conn.cursor()
-    try:
-        c.execute("SELECT * FROM users WHERE user_id = ?", (recruiter_id,))
-        user = c.fetchone()
-        if not user:
-            registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            c.execute("""
-                INSERT INTO users 
-                (user_id, username, first_name, last_name, registration_date, balance, test_passed) 
-                VALUES (?, ?, ?, ?, ?, 0, 0)
-            """, (recruiter_id, recruiter_username, recruiter_name, "", registration_date))
-            conn.commit()
-            logger.info(f"✅ Пользователь {recruiter_id} создан")
-        
-        c.execute('''SELECT id FROM couriers 
-                     WHERE recruiter_id = ? AND full_name = ? AND city = ? AND status = 'confirmed' ''',
-                  (recruiter_id, full_name, city))
-        exists = c.fetchone()
-        
-        if exists:
-            logger.info(f"   ⚠️ Курьер уже существует с id={exists[0]}")
-            return False, "Курьер с такими данными уже подтвержден"
-        
-        registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        c.execute('''INSERT INTO couriers 
-                     (recruiter_id, full_name, city, status, registered_at)
-                     VALUES (?, ?, ?, ?, ?)''',
-                  (recruiter_id, full_name, city, 'pending', registered_at))
-        conn.commit()
-        
-        courier_id = c.lastrowid
-        logger.info(f"   ✅ Курьер добавлен с ID: {courier_id}")
-        
-        c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (recruiter_id,))
-        total_balance = c.fetchone()[0] or 0
-        c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (total_balance, recruiter_id))
-        conn.commit()
-        
-        success, row_number = add_courier_to_google_sheet(
-            recruiter_name, recruiter_username, full_name, city
-        )
-        
-        if success and row_number:
-            c.execute('''UPDATE couriers SET sheet_row = ? WHERE id = ?''', (row_number, courier_id))
-            conn.commit()
-            logger.info(f"✅ Курьер {full_name} добавлен, строка в таблице: {row_number}")
-        
-        return True, "Заявка на курьера отправлена на проверку! ✅"
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка в add_courier: {e}")
-        traceback.print_exc()
-        return False, f"Ошибка: {str(e)}"
-
-def get_recruiter_couriers(recruiter_id):
-    """Получает всех курьеров рекрутера"""
-    try:
-        conn = get_db()
-        c = conn.cursor()
-        c.execute('''SELECT full_name, city, status, registered_at, confirmed_at, balance 
-                     FROM couriers 
-                     WHERE recruiter_id = ? 
-                     ORDER BY registered_at DESC''', (recruiter_id,))
-        return c.fetchall()
-    except Exception as e:
-        logger.error(f"Ошибка в get_recruiter_couriers: {e}")
-        return []
-
 # ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1392,12 +1303,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"🚀 Запуск бота для пользователя {user_id}")
     
-    # Проверяем, зарегистрирован ли пользователь
     if not is_registered(user_id):
         logger.info(f"📝 Регистрация нового пользователя {user_id}")
         register_user(user_id, user.username, user.first_name, user.last_name)
     
-    # Получаем статус теста
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
@@ -1406,12 +1315,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"📊 Статус теста пользователя {user_id}: {test_passed}")
     
-    # Удаляем предыдущие сообщения перед отправкой нового
     await delete_previous_messages(update, context)
     
-    # Отправляем соответствующее меню
     if test_passed == 1:
-        # Пользователь прошел тест - показываем полное меню
         keyboard = [
             [InlineKeyboardButton("📋 Вся информация", callback_data='all_info')],
             [InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')],
@@ -1429,7 +1335,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard=InlineKeyboardMarkup(keyboard)
         )
     else:
-        # Пользователь не прошел тест - показываем меню с предложением пройти тест
         keyboard = [
             [InlineKeyboardButton("📋 Вся информация", callback_data='all_info')],
             [InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')]
@@ -1442,6 +1347,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption=menu_text,
             keyboard=InlineKeyboardMarkup(keyboard)
         )
+
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1465,6 +1371,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith('withdrawal_reject_'):
         await admin_withdrawal_reject_start(update, context)
         return
+    elif data == 'message_user':
+        await admin_message_user_start(update, context)
+        return
+    elif data.startswith('msg_'):
+        await admin_message_user_send(update, context)
+        return
     
     conn = get_db()
     c = conn.cursor()
@@ -1477,7 +1389,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')]]
         text = "❌ *Доступ запрещен!*\n\nДля доступа к этому разделу необходимо пройти тест."
         
-        # Проверяем, есть ли у сообщения фото
         if query.message.photo:
             await query.message.delete()
             await context.bot.send_message(
@@ -1523,6 +1434,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_test_answer(update, context)
     elif data in ['withdrawal_card', 'withdrawal_yoomoney', 'withdrawal_other']:
         await process_withdrawal_option(query, user_id, context)
+
 async def show_rates(query, context):
     """Временная заглушка для ставок по городам"""
     text = (
@@ -1537,7 +1449,6 @@ async def show_rates(query, context):
     
     keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]]
     
-    # Проверяем, есть ли у сообщения фото
     if query.message.photo:
         await query.message.delete()
         await context.bot.send_message(
@@ -1553,6 +1464,7 @@ async def show_rates(query, context):
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
+
 # ========== ВЫВОД СРЕДСТВ ==========
 async def withdrawal_menu(query, user_id, context):
     balance = get_user_balance(user_id)
@@ -1577,7 +1489,6 @@ async def withdrawal_menu(query, user_id, context):
         [InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]
     ]
     
-    # Проверяем, есть ли у сообщения фото
     if query.message.photo:
         await query.message.delete()
         await context.bot.send_message(
@@ -1646,7 +1557,12 @@ async def user_withdrawal_history(update: Update, context: ContextTypes.DEFAULT_
     )
 
 async def process_withdrawal_option(query, user_id, context):
-    method = query.data.replace('withdrawal_', '')
+    method_map = {
+        'withdrawal_card': 'Карта',
+        'withdrawal_yoomoney': 'ЮMoney',
+        'withdrawal_other': 'Другой способ'
+    }
+    method = method_map.get(query.data, 'Неизвестно')
     context.user_data['withdrawal_method'] = method
     
     text = (
@@ -1658,7 +1574,6 @@ async def process_withdrawal_option(query, user_id, context):
     
     keyboard = [[InlineKeyboardButton("🔙 Отмена", callback_data='withdrawal')]]
     
-    # Проверяем, есть ли у сообщения фото
     if query.message.photo:
         await query.message.delete()
         await context.bot.send_message(
@@ -1712,39 +1627,45 @@ async def handle_withdrawal_input(update: Update, context: ContextTypes.DEFAULT_
         
         request_id = create_withdrawal_request(user.id, amount, method, details)
         
-        await send_and_track(
-            update, context,
-            f"✅ *Заявка на вывод создана!*\n\n"
-            f"🆔 Номер заявки: `{request_id}`\n"
-            f"💰 Сумма: {amount} руб.\n"
-            f"💳 Способ: {method}\n\n"
-            f"Ожидайте подтверждения администратором.",
-            parse_mode='Markdown'
-        )
-        
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ Подтвердить", callback_data=f'withdrawal_confirm_{request_id}'),
-                InlineKeyboardButton("❌ Отказать", callback_data=f'withdrawal_reject_{request_id}')
+        if request_id:
+            await send_and_track(
+                update, context,
+                f"✅ *Заявка на вывод создана!*\n\n"
+                f"🆔 Номер заявки: `{request_id}`\n"
+                f"💰 Сумма: {amount} руб.\n"
+                f"💳 Способ: {method}\n\n"
+                f"Ожидайте подтверждения администратором.",
+                parse_mode='Markdown'
+            )
+            
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Подтвердить", callback_data=f'withdrawal_confirm_{request_id}'),
+                    InlineKeyboardButton("❌ Отказать", callback_data=f'withdrawal_reject_{request_id}')
+                ]
             ]
-        ]
-        
-        admin_message = (
-            f"💰 *НОВАЯ ЗАЯВКА НА ВЫВОД*\n\n"
-            f"🆔 *Заявка:* `{request_id}`\n"
-            f"👤 *Пользователь:* {user.first_name} (@{user.username})\n"
-            f"🆔 *User ID:* `{user.id}`\n"
-            f"💰 *Сумма:* {amount} руб.\n"
-            f"💳 *Способ:* {method}\n"
-            f"📝 *Реквизиты:* {details}"
-        )
-        
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=admin_message,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+            
+            admin_message = (
+                f"💰 *НОВАЯ ЗАЯВКА НА ВЫВОД*\n\n"
+                f"🆔 *Заявка:* `{request_id}`\n"
+                f"👤 *Пользователь:* {user.first_name} (@{user.username})\n"
+                f"🆔 *User ID:* `{user.id}`\n"
+                f"💰 *Сумма:* {amount} руб.\n"
+                f"💳 *Способ:* {method}\n"
+                f"📝 *Реквизиты:* {details}"
+            )
+            
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=admin_message,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+        else:
+            await send_and_track(
+                update, context,
+                "❌ Ошибка при создании заявки. Попробуйте позже."
+            )
         
     except ValueError:
         await send_and_track(
@@ -1842,6 +1763,99 @@ async def handle_withdrawal_reject_reason(update: Update, context: ContextTypes.
     
     context.user_data['rejecting_withdrawal'] = None
 
+# ========== НОВАЯ ФУНКЦИЯ: ЛИЧНОЕ СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЮ ==========
+async def admin_message_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начинает процесс отправки личного сообщения пользователю"""
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.edit_message_text("❌ У вас нет прав администратора")
+        return
+    
+    # Получаем список пользователей
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT user_id, username, first_name FROM users ORDER BY user_id")
+    users = c.fetchall()
+    
+    if not users:
+        await query.edit_message_text("📭 Нет пользователей для отправки сообщений")
+        return
+    
+    # Создаем клавиатуру с пользователями (по 3 в ряд)
+    keyboard = []
+    row = []
+    for i, (user_id, username, first_name) in enumerate(users):
+        display_name = first_name or f"ID:{user_id}"
+        if username:
+            display_name = f"@{username}"
+        
+        button = InlineKeyboardButton(
+            display_name, 
+            callback_data=f'msg_{user_id}'
+        )
+        row.append(button)
+        
+        if len(row) == 3 or i == len(users) - 1:
+            keyboard.append(row)
+            row = []
+    
+    keyboard.append([InlineKeyboardButton("🔙 Отмена", callback_data='admin_back')])
+    
+    await query.edit_message_text(
+        "👤 *Выберите пользователя для отправки сообщения:*",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+
+async def admin_message_user_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает выбор пользователя для отправки сообщения"""
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    user_id = int(query.data.replace('msg_', ''))
+    context.user_data['message_target_user'] = user_id
+    
+    await query.edit_message_text(
+        f"📝 Введите сообщение для пользователя (ID: {user_id}):",
+        parse_mode='Markdown'
+    )
+    
+    context.user_data['awaiting_admin_message'] = True
+
+async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправляет личное сообщение выбранному пользователю"""
+    if update.effective_user.id != ADMIN_ID:
+        return
+    
+    target_user_id = context.user_data.get('message_target_user')
+    if not target_user_id:
+        return
+    
+    message_text = update.message.text
+    
+    try:
+        # Отправляем сообщение пользователю
+        await context.bot.send_message(
+            chat_id=target_user_id,
+            text=f"📢 *Сообщение от администратора:*\n\n{message_text}",
+            parse_mode='Markdown'
+        )
+        
+        await update.message.reply_text(f"✅ Сообщение отправлено пользователю ID: {target_user_id}")
+        logger.info(f"📨 Админ отправил сообщение пользователю {target_user_id}")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при отправке: {e}")
+        logger.error(f"❌ Ошибка отправки сообщения пользователю {target_user_id}: {e}")
+    
+    context.user_data['message_target_user'] = None
+    context.user_data['awaiting_admin_message'] = False
+
 # ========== ПОДДЕРЖКА ==========
 async def support_start(query, user_id, context):
     text = (
@@ -1853,9 +1867,7 @@ async def support_start(query, user_id, context):
     
     keyboard = [[InlineKeyboardButton("🔙 Отмена", callback_data='back_to_main')]]
     
-    # ВАЖНО: Проверяем, есть ли у сообщения фото
     if query.message.photo:
-        # Если это сообщение с фото - удаляем и отправляем новое текстовое
         await query.message.delete()
         await context.bot.send_message(
             chat_id=query.message.chat_id,
@@ -1864,7 +1876,6 @@ async def support_start(query, user_id, context):
             parse_mode='Markdown'
         )
     else:
-        # Если это текстовое сообщение - редактируем
         await edit_and_track(
             query, context,
             text,
@@ -1873,6 +1884,7 @@ async def support_start(query, user_id, context):
         )
     
     context.user_data['awaiting_support_message'] = True
+
 async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     message_text = update.message.text
@@ -1945,11 +1957,14 @@ async def admin_close_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     
     if ticket:
         if close_ticket(ticket_id, "Тикет закрыт администратором"):
-            await context.bot.send_message(
-                chat_id=ticket[1],
-                text=f"🆘 *Обращение #{ticket_id} закрыто*\n\nВаш тикет был закрыт администратором.",
-                parse_mode='Markdown'
-            )
+            try:
+                await context.bot.send_message(
+                    chat_id=ticket[1],
+                    text=f"🆘 *Обращение #{ticket_id} закрыто*\n\nВаш тикет был закрыт администратором.",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"❌ Не удалось уведомить пользователя: {e}")
             await query.edit_message_text(f"✅ Тикет {ticket_id} закрыт")
         else:
             await query.edit_message_text(f"❌ Ошибка при закрытии тикета {ticket_id}")
@@ -1976,13 +1991,15 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 f"⏱ Время ответа: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
             )
             
-            await context.bot.send_message(
-                chat_id=ticket[1],
-                text=user_message,
-                parse_mode='Markdown'
-            )
-            
-            await update.message.reply_text(f"✅ Ответ на тикет {ticket_id} отправлен пользователю")
+            try:
+                await context.bot.send_message(
+                    chat_id=ticket[1],
+                    text=user_message,
+                    parse_mode='Markdown'
+                )
+                await update.message.reply_text(f"✅ Ответ на тикет {ticket_id} отправлен пользователю")
+            except Exception as e:
+                await update.message.reply_text(f"❌ Не удалось отправить ответ пользователю: {e}")
         else:
             await update.message.reply_text(f"❌ Ошибка при ответе на тикет {ticket_id}")
     else:
@@ -2001,9 +2018,7 @@ async def personal_account_menu(query, user_id, context):
     
     text = "👤 *Личный кабинет*\n\nВыберите действие:"
     
-    # Проверяем, есть ли у сообщения фото
     if query.message.photo:
-        # Если это фото - удаляем и отправляем новое текстовое
         await query.message.delete()
         await context.bot.send_message(
             chat_id=query.message.chat_id,
@@ -2012,7 +2027,6 @@ async def personal_account_menu(query, user_id, context):
             parse_mode='Markdown'
         )
     else:
-        # Если это текст - редактируем
         await edit_and_track(
             query, context,
             text,
@@ -2055,7 +2069,6 @@ async def show_my_couriers(query, user_id, context):
         [InlineKeyboardButton("🔙 Назад", callback_data='personal_account')]
     ]
     
-    # Проверяем, есть ли у сообщения фото
     if query.message.photo:
         await query.message.delete()
         await context.bot.send_message(
@@ -2071,6 +2084,7 @@ async def show_my_couriers(query, user_id, context):
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
+
 async def add_courier_start(query, user_id, context):
     text = (
         "📝 *Запись курьера*\n\n"
@@ -2083,7 +2097,6 @@ async def add_courier_start(query, user_id, context):
     
     keyboard = [[InlineKeyboardButton("🔙 Отмена", callback_data='personal_account')]]
     
-    # Проверяем, есть ли у сообщения фото
     if query.message.photo:
         await query.message.delete()
         await context.bot.send_message(
@@ -2220,10 +2233,7 @@ async def show_test_question(query, context):
         
         text = f"📝 *Вопрос {current + 1} из {len(questions)}*\n\n{question['question']}"
         
-        # ВАЖНО: Проверяем, есть ли у сообщения фото
         if query.message.photo:
-            # Если это сообщение с фото - удаляем и отправляем новое
-            logger.info("🖼️ Обнаружено фото, отправляем новый текст")
             await query.message.delete()
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
@@ -2232,8 +2242,6 @@ async def show_test_question(query, context):
                 parse_mode='Markdown'
             )
         else:
-            # Если это текстовое сообщение - редактируем
-            logger.info("📝 Редактируем текстовое сообщение")
             await query.edit_message_text(
                 text=text,
                 reply_markup=InlineKeyboardMarkup(keyboard),
@@ -2293,9 +2301,7 @@ async def handle_test_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         keyboard = [[InlineKeyboardButton("➡️ Далее", callback_data='next_question')]]
         
-        # ВАЖНО: Проверяем, есть ли у сообщения фото
         if query.message.photo:
-            logger.info("🖼️ Обнаружено фото, отправляем новый текст")
             await query.message.delete()
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
@@ -2304,7 +2310,6 @@ async def handle_test_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 parse_mode='Markdown'
             )
         else:
-            logger.info("📝 Редактируем текстовое сообщение")
             await query.edit_message_text(
                 text=text,
                 reply_markup=InlineKeyboardMarkup(keyboard),
@@ -2325,6 +2330,7 @@ async def handle_test_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await query.edit_message_text("❌ Произошла ошибка. Начните тест заново.")
         except:
             pass
+
 async def next_question_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     
@@ -2376,32 +2382,18 @@ async def finish_test(query, context):
     logger.info(f"🎯 Завершение теста для пользователя {user_id}, правильных ответов: {correct_count}")
     
     if correct_count >= 7:
-        # Тест сдан успешно
-        logger.info(f"✅ Пользователь {user_id} сдал тест (правильных ответов: {correct_count})")
-        
-        # Обновляем статус в БД
+        logger.info(f"✅ Пользователь {user_id} сдал тест")
         update_test_status(user_id, True)
         
-        # Проверяем, что статус действительно обновился
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
-        new_status = c.fetchone()[0]
-        logger.info(f"📊 После обновления test_passed в БД = {new_status}")
-        
-        # Очищаем данные теста
         context.user_data.pop('test_answers', None)
         context.user_data.pop('test_current', None)
         context.user_data.pop('test_questions', None)
         
-        # Показываем главное меню (с полным доступом)
-        logger.info(f"🏠 Перенаправляем пользователя {user_id} в главное меню")
         await back_to_main(query, user_id, context)
         return
         
     elif correct_count < 3:
-        # Полный провал
-        logger.info(f"❌ Пользователь {user_id} провалил тест (правильных ответов: {correct_count})")
+        logger.info(f"❌ Пользователь {user_id} провалил тест")
         update_test_status(user_id, False)
         text = (
             f"❌ *Тест не пройден*\n\n"
@@ -2410,12 +2402,10 @@ async def finish_test(query, context):
         )
         keyboard = [[InlineKeyboardButton("🏠 В главное меню", callback_data='back_to_main')]]
         
-        # Очищаем данные теста
         context.user_data.pop('test_answers', None)
         context.user_data.pop('test_current', None)
         context.user_data.pop('test_questions', None)
         
-        # Отправляем результат
         if query.message.photo:
             await query.message.delete()
             await context.bot.send_message(
@@ -2431,8 +2421,7 @@ async def finish_test(query, context):
                 parse_mode='Markdown'
             )
     else:
-        # Можно попробовать снова
-        logger.info(f"⚠️ Пользователь {user_id} не сдал тест, но может попробовать снова (правильных ответов: {correct_count})")
+        logger.info(f"⚠️ Пользователь {user_id} не сдал тест, но может попробовать снова")
         update_test_status(user_id, False)
         text = (
             f"⚠️ *Тест не пройден*\n\n"
@@ -2441,12 +2430,10 @@ async def finish_test(query, context):
         )
         keyboard = [[InlineKeyboardButton("📝 Пройти тест заново", callback_data='take_test')]]
         
-        # Очищаем данные теста
         context.user_data.pop('test_answers', None)
         context.user_data.pop('test_current', None)
         context.user_data.pop('test_questions', None)
         
-        # Отправляем результат
         if query.message.photo:
             await query.message.delete()
             await context.bot.send_message(
@@ -2478,7 +2465,6 @@ async def show_all_info_menu(query, context):
     
     text = "📋 *Вся информация*\n\nВыберите интересующий вас раздел:"
     
-    # Проверяем, есть ли у сообщения фото
     if query.message.photo:
         await query.message.delete()
         await context.bot.send_message(
@@ -2622,7 +2608,6 @@ async def show_info_section(query, context):
     else:
         keyboard = [[InlineKeyboardButton("🔙 Назад к разделам", callback_data='back_to_info')]]
     
-    # Проверяем, есть ли у сообщения фото
     if query.message.photo:
         await query.message.delete()
         await context.bot.send_message(
@@ -2710,6 +2695,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_withdrawal_reject_reason(update, context)
         return
     
+    if context.user_data.get('awaiting_admin_message'):
+        await handle_admin_message(update, context)
+        return
+    
     await send_and_track(
         update, context,
         "Используйте команду /start для навигации"
@@ -2721,6 +2710,12 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ У вас нет прав администратора")
         return
+    
+    keyboard = [
+        [InlineKeyboardButton("📋 Все команды", callback_data='admin_commands')],
+        [InlineKeyboardButton("👤 Отправить сообщение пользователю", callback_data='message_user')],
+        [InlineKeyboardButton("🔄 Синхронизация", callback_data='admin_sync')]
+    ]
     
     text = (
         "🛠 *Панель администратора*\n\n"
@@ -2738,11 +2733,16 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔹 `/fixusers` - исправить данные пользователей\n"
         "🔹 `/testgoogle` - тест подключения к Google Sheets\n"
         "🔹 `/broadcast` - сделать рассылку\n\n"
+        "🔹 *Личные сообщения:* используйте кнопку ниже\n"
         "🔹 *Заявки на вывод:* обрабатываются через кнопки в уведомлениях\n"
         "🔹 *Поддержка:* отвечайте через кнопки в тикетах"
     )
     
-    await update.message.reply_text(text, parse_mode='Markdown')
+    await update.message.reply_text(
+        text, 
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def admin_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Принудительная синхронизация статусов с Google Sheets"""
@@ -2964,22 +2964,22 @@ async def admin_fix_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif context.args and context.args[0].lower() == 'all':
         status_msg = await update.message.reply_text("🔄 Пересчитываю балансы для всех пользователей...")
         
-        c.execute("SELECT DISTINCT recruiter_id FROM couriers WHERE recruiter_id IS NOT NULL")
-        recruiters = c.fetchall()
+        c.execute("SELECT user_id FROM users")
+        users = c.fetchall()
         
         count = 0
-        for recruiter in recruiters:
-            recruiter_id = recruiter[0]
+        for user in users:
+            user_id = user[0]
             
-            c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (recruiter_id,))
+            c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (user_id,))
             couriers_sum = c.fetchone()[0] or 0
             
-            c.execute("SELECT SUM(amount) FROM withdrawals WHERE user_id = ? AND status = 'completed'", (recruiter_id,))
+            c.execute("SELECT SUM(amount) FROM withdrawals WHERE user_id = ? AND status = 'completed'", (user_id,))
             withdrawals_sum = c.fetchone()[0] or 0
             
             real_balance = couriers_sum - withdrawals_sum
             
-            c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (real_balance, recruiter_id))
+            c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (real_balance, user_id))
             count += 1
         
         conn.commit()
@@ -3277,6 +3277,9 @@ def main():
     # Инициализируем БД
     init_database()
     
+    # Загружаем бэкап если есть
+    load_backup()
+    
     # Запускаем автосохранение и мониторинг
     start_auto_backup()
     start_sheet_monitoring()
@@ -3310,14 +3313,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
-
-
-
-
-
-
-
-
