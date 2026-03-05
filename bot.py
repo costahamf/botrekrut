@@ -2342,14 +2342,13 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
         message_text
     )
     
-    # Отправляем подтверждение пользователю БЕЗ Markdown
+    # Отправляем подтверждение пользователю (без Markdown)
     await send_and_track(
         update, context,
         f"✅ Ваше обращение принято!\n\n"
         f"🆔 Номер обращения: {ticket_id}\n"
         f"⏱ Ожидаемое время ответа: от 15 минут до 1 часа\n\n"
         f"Как только администратор ответит, вы получите уведомление."
-        # parse_mode не указываем
     )
     
     keyboard = [
@@ -2357,31 +2356,27 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
         [InlineKeyboardButton("✅ Закрыть", callback_data=f'admin_close_{ticket_id}')]
     ]
     
-    # ЭКРАНИРУЕМ ВСЕ СПЕЦСИМВОЛЫ В СООБЩЕНИИ ПОЛЬЗОВАТЕЛЯ
-    # Markdown спецсимволы: _ * [ ] ( ) ~ ` > # + - = | { } . !
-    import re
-    special_chars = r'[_*[\]()~`>#+\-=|{}.!]'
-    escaped_message = re.sub(special_chars, r'\\\g<0>', message_text)
-    
-    # Также экранируем username если есть
-    username_display = f"@{user.username}" if user.username else "нет username"
-    escaped_username = re.sub(special_chars, r'\\\g<0>', username_display)
+    # Экранируем спецсимволы в имени пользователя и сообщении
+    # Простой способ - заменить потенциально опасные символы
+    safe_first_name = user.first_name.replace('_', ' ').replace('*', ' ').replace('`', ' ')
+    safe_username = f"@{user.username}" if user.username else "нет username"
+    safe_username = safe_username.replace('_', ' ').replace('*', ' ').replace('`', ' ')
+    safe_message = message_text.replace('_', ' ').replace('*', ' ').replace('`', ' ')
     
     admin_message = (
-        f"🆘 *НОВОЕ ОБРАЩЕНИЕ В ПОДДЕРЖКУ*\n\n"
-        f"🆔 *Тикет:* `{ticket_id}`\n"
-        f"👤 *Пользователь:* {user.first_name} ({escaped_username})\n"
-        f"🆔 *User ID:* `{user.id}`\n"
-        f"📅 *Время:* {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
-        f"📝 *Сообщение:*\n{escaped_message}"
+        f"🆘 НОВОЕ ОБРАЩЕНИЕ В ПОДДЕРЖКУ\n\n"
+        f"🆔 Тикет: {ticket_id}\n"
+        f"👤 Пользователь: {safe_first_name} ({safe_username})\n"
+        f"🆔 User ID: {user.id}\n"
+        f"📅 Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
+        f"📝 Сообщение:\n{safe_message}"
     )
     
-    # Отправляем админу с Markdown
+    # Отправляем админу БЕЗ parse_mode
     await context.bot.send_message(
         chat_id=ADMIN_ID,
         text=admin_message,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
     
     context.user_data['awaiting_support_message'] = False
@@ -3810,6 +3805,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
