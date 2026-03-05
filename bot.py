@@ -1684,9 +1684,8 @@ async def show_rates(query, context):
     """Временная заглушка для ставок по городам"""
     text = (
         "💼 *Ставки по городам*\n\n"
-        "Для удобства мы сделали для вас Google таблицу.\n\n"
-        "Перейти в таблицу:\n"
-        "Ссылка: https://docs.google.com/spreadsheets/d/1Zg-rzfnK1ON9J7TXIGI6yaMEc-ae2v3hQ46sDhnO0n8/edit?usp=sharing\n"
+        "Ссылка на Google Таблицу:\n"
+        "https://docs.google.com/spreadsheets/d/1Zg-rzfnK1ON9J7TXIGI6yaMEc-ae2v3hQ46sDhnO0n8/edit?usp=sharing\n"
     )
     
     keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]]
@@ -3592,6 +3591,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
