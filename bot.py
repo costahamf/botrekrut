@@ -1694,8 +1694,44 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"📊 Статус теста пользователя {user_id}: {test_passed}")
     
-    await delete_previous_messages(update, context)
+    # ========== НОВЫЙ КОД: ПОЛНАЯ ОЧИСТКА ЧАТА ==========
+    try:
+        chat_id = update.message.chat_id
+        
+        # Удаляем сообщение с командой /start
+        await context.bot.delete_message(
+            chat_id=chat_id,
+            message_id=update.message.message_id
+        )
+        
+        # Удаляем последнее сообщение бота (если есть)
+        if 'last_bot_message_id' in context.user_data:
+            try:
+                await context.bot.delete_message(
+                    chat_id=context.user_data['last_chat_id'],
+                    message_id=context.user_data['last_bot_message_id']
+                )
+            except:
+                pass
+        
+        # Получаем все сообщения в чате и удаляем их
+        deleted_count = 0
+        async for message in context.bot.get_chat_history(chat_id, limit=100):
+            try:
+                # Пропускаем только если это служебное сообщение (но таких в личке нет)
+                await context.bot.delete_message(chat_id, message.message_id)
+                deleted_count += 1
+                await asyncio.sleep(0.1)  # Небольшая задержка чтобы не спамить запросами
+            except Exception as e:
+                logger.debug(f"Не удалось удалить сообщение {message.message_id}: {e}")
+        
+        logger.info(f"🧹 Удалено {deleted_count} сообщений в чате {chat_id}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при очистке чата: {e}")
+    # ========== КОНЕЦ НОВОГО КОДА ==========
     
+    # Отправляем новое меню
     if test_passed == 1:
         keyboard = [
             [InlineKeyboardButton("📋 Вся информация", callback_data='all_info')],
@@ -1726,7 +1762,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption=menu_text,
             keyboard=InlineKeyboardMarkup(keyboard)
         )
-
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -3725,6 +3760,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
