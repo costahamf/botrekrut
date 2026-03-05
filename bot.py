@@ -102,7 +102,7 @@ def init_database():
                   admin_reply TEXT,
                   FOREIGN KEY (user_id) REFERENCES users(user_id))''')
     
-    # Таблица курьеров с новым полем orders_completed
+    # Таблица курьеров с новыми полями
     c.execute('''CREATE TABLE IF NOT EXISTS couriers
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   recruiter_id INTEGER,
@@ -114,15 +114,28 @@ def init_database():
                   confirmed_at TEXT,
                   sheet_row INTEGER,
                   orders_completed INTEGER DEFAULT 0,
+                  reject_reason TEXT,
+                  invited_at TEXT,
                   FOREIGN KEY (recruiter_id) REFERENCES users(user_id))''')
     
-    # Проверяем, есть ли уже поле orders_completed в существующей таблице
+    # Проверяем и добавляем новые поля, если их нет
     try:
         c.execute("SELECT orders_completed FROM couriers LIMIT 1")
     except sqlite3.OperationalError:
-        # Если поля нет, добавляем его
         c.execute("ALTER TABLE couriers ADD COLUMN orders_completed INTEGER DEFAULT 0")
         logger.info("✅ Добавлено поле orders_completed в таблицу couriers")
+    
+    try:
+        c.execute("SELECT reject_reason FROM couriers LIMIT 1")
+    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE couriers ADD COLUMN reject_reason TEXT")
+        logger.info("✅ Добавлено поле reject_reason в таблицу couriers")
+    
+    try:
+        c.execute("SELECT invited_at FROM couriers LIMIT 1")
+    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE couriers ADD COLUMN invited_at TEXT")
+        logger.info("✅ Добавлено поле invited_at в таблицу couriers")
     
     conn.commit()
     logger.info("✅ Таблицы созданы/проверены")
@@ -141,7 +154,6 @@ def init_database():
         logger.error(f"❌ Ошибка при пересчете балансов: {e}")
     
     logger.info("✅ База данных инициализирована")
-    
 # ========== ФУНКЦИИ ДЛЯ ПЕРЕСЧЕТА БАЛАНСОВ ==========
 def recalc_all_balances():
     """Пересчитывает балансы всех пользователей"""
@@ -873,18 +885,33 @@ def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, c
         if not sheet:
             return None, None
         
-        # Ваши существующие столбцы + новый
+        # Ваши столбцы: 
+        # A: Дата и время
+        # B: Имя рекрутера
+        # C: Username рекрутера
+        # D: ФИО клиента
+        # E: Город
+        # F: СТАТУС
+        # G: Баланс
+        # H: ПРИНЯТО
+        # I: ОТКЛОНЕНО
+        # J: Выполнено заказов
+        # K: Причина отказа
+        # L: Приглашен в хаб 
+        
         row = [
-            datetime.now().strftime("%d.%m.%Y %H:%M"),  # Дата и время
-            recruiter_name,                              # Имя рекрутера
-            f"@{recruiter_username}" if recruiter_username else "-",  # Username рекрутера
-            full_name,                                   # ФИО клиента
-            city,                                        # Город
-            "⏳ Ожидает",                                 # СТАТУС
-            0,                                           # Баланс
-            0,                                           # ПРИНЯТО
-            0,                                           # ОТКЛОНЕНО
-            0                                            # Выполнено заказов (НОВЫЙ СТОЛБЕЦ)
+            datetime.now().strftime("%d.%m.%Y %H:%M"),  # A: Дата и время
+            recruiter_name,                              # B: Имя рекрутера
+            f"@{recruiter_username}" if recruiter_username else "-",  # C: Username рекрутера
+            full_name,                                   # D: ФИО клиента
+            city,                                        # E: Город
+            "⏳ Ожидает",                                 # F: СТАТУС
+            0,                                           # G: Баланс
+            0,                                           # H: ПРИНЯТО
+            0,                                           # I: ОТКЛОНЕНО
+            0,                                           # J: Выполнено заказов
+            "",                                          # K: Причина отказа
+            ""                                           # L: Приглашен в хаб 
         ]
         
         sheet.append_row(row, value_input_option='USER_ENTERED')
@@ -898,7 +925,67 @@ def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, c
     except Exception as e:
         logger.error(f"Ошибка добавления в Google Sheets: {e}")
         return None, None
-
+def notify_recruiter_about_status_change(recruiter_id, full_name, city, new_status, reject_reason=""):
+    """Отправляет уведомление рекрутеру об изменении статуса курьера"""
+    try:
+        def send_notification():
+            try:
+                conn = get_db()
+                c = conn.cursor()
+                c.execute("SELECT user_id FROM users WHERE user_id = ?", (recruiter_id,))
+                if not c.fetchone():
+                    return
+                
+                # Формируем сообщение в зависимости от статуса
+                if new_status == 'confirmed':
+                    message = (
+                        f"✅ *Курьер подтвержден!*\n\n"
+                        f"👤 *Имя:* {full_name}\n"
+                        f"🏙 *Город:* {city}\n\n"
+                        f"Курьер успешно прошел проверку и теперь может работать!"
+                    )
+                elif new_status == 'rejected':
+                    message = (
+                        f"❌ *Курьер отклонен*\n\n"
+                        f"👤 *Имя:* {full_name}\n"
+                        f"🏙 *Город:* {city}\n"
+                    )
+                    if reject_reason:
+                        message += f"📝 *Причина:* {reject_reason}\n\n"
+                    else:
+                        message += f"\n"
+                    message += f"Попробуйте записать другого кандидата."
+                elif new_status == 'invited':
+                    message = (
+                        f"🏢 *Курьер приглашен в хаб!*\n\n"
+                        f"👤 *Имя:* {full_name}\n"
+                        f"🏙 *Город:* {city}\n\n"
+                        f"Курьер приглашен для прохождения обучения в хабе.\n"
+                        f"Статус 'Приглашен в хаб' означает, что кандидат прошел первичный отбор."
+                    )
+                else:
+                    return
+                
+                import asyncio
+                from telegram import Bot
+                
+                bot = Bot(token=TOKEN)
+                asyncio.run(bot.send_message(
+                    chat_id=recruiter_id,
+                    text=message,
+                    parse_mode='Markdown'
+                ))
+                
+                logger.info(f"📨 Уведомление о статусе '{new_status}' отправлено рекрутеру {recruiter_id}")
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка при отправке уведомления: {e}")
+        
+        thread = threading.Thread(target=send_notification)
+        thread.start()
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка в notify_recruiter_about_status_change: {e}")
 def update_courier_status_in_sheet(sheet_row, status_text):
     """Обновляет статус в Google Sheets"""
     try:
@@ -1003,10 +1090,13 @@ def check_pending_couriers():
                 balance_raw = record.get('Баланс', '0')
                 accepted_raw = record.get('ПРИНЯТО', '0')
                 rejected_raw = record.get('ОТКЛОНЕНО', '0')
+                invited_raw = record.get('Приглашен в хаб', '0')  # НОВЫЙ СТОЛБЕЦ
                 orders_raw = record.get('Выполнено заказов', '0')
+                reject_reason_raw = record.get('Причина отказа', '')
                 
                 accepted = str(accepted_raw).strip()
                 rejected = str(rejected_raw).strip()
+                invited = str(invited_raw).strip()  # НОВОЕ
                 
                 try:
                     balance_str = str(balance_raw).strip().replace(' ', '').replace(',', '.')
@@ -1020,20 +1110,37 @@ def check_pending_couriers():
                 except:
                     orders_completed = 0
                 
+                reject_reason = str(reject_reason_raw).strip() if reject_reason_raw else ""
+                
                 sheet_row = i + 2
                 
-                new_status = None
-                if accepted in ['1', 'true', 'True', 'TRUE', 'yes', 'Yes', 'YES', '✅', '☑']:
+                # ОПРЕДЕЛЯЕМ СТАТУС ПО ПРИОРИТЕТУ:
+                # 1. Сначала проверяем "Приглашен в хаб"
+                if invited in ['1', 'true', 'True', 'TRUE', 'yes', 'Yes', 'YES', '✅', '☑']:
+                    new_status = 'invited'
+                    status_text_map = "🏢 Приглашен в хаб"
+                # 2. Потом проверяем "ПРИНЯТО"
+                elif accepted in ['1', 'true', 'True', 'TRUE', 'yes', 'Yes', 'YES', '✅', '☑']:
                     new_status = 'confirmed'
+                    status_text_map = "✅ Подтвержден"
+                # 3. Потом проверяем "ОТКЛОНЕНО"
                 elif rejected in ['1', 'true', 'True', 'TRUE', 'yes', 'Yes', 'YES', '❌']:
                     new_status = 'rejected'
+                    status_text_map = "❌ Отклонен"
                 else:
-                    if 'Подтвержден' in status_text or '✅' in status_text or '☑' in status_text:
+                    # Если ничего не проставлено - проверяем по тексту статуса
+                    if 'Подтвержден' in status_text or '✅' in status_text:
                         new_status = 'confirmed'
+                        status_text_map = "✅ Подтвержден"
                     elif 'Отклонен' in status_text or '❌' in status_text:
                         new_status = 'rejected'
+                        status_text_map = "❌ Отклонен"
+                    elif 'Приглашен' in status_text or '🏢' in status_text or 'хаб' in status_text.lower():
+                        new_status = 'invited'
+                        status_text_map = "🏢 Приглашен в хаб"
                     else:
                         new_status = 'pending'
+                        status_text_map = "⏳ Ожидает"
                 
                 # Находим рекрутера
                 recruiter_id = None
@@ -1050,57 +1157,84 @@ def check_pending_couriers():
                     continue
                 
                 # Ищем курьера в БД
-                c.execute('''SELECT id, status, sheet_row, balance, orders_completed FROM couriers 
-                             WHERE full_name = ? AND city = ? ORDER BY id DESC LIMIT 1''',
+                c.execute('''SELECT id, status, sheet_row, balance, orders_completed, reject_reason, invited_at 
+                           FROM couriers WHERE full_name = ? AND city = ? ORDER BY id DESC LIMIT 1''',
                           (full_name, city))
                 existing = c.fetchone()
                 
                 if existing:
-                    existing_id, existing_status, existing_sheet_row, existing_balance, existing_orders = existing
+                    (existing_id, existing_status, existing_sheet_row, 
+                     existing_balance, existing_orders, existing_reject_reason, existing_invited_at) = existing
                     
+                    # Обновляем статус если изменился
                     if existing_status != new_status:
-                        c.execute('''UPDATE couriers 
-                                     SET status = ?, confirmed_at = ? 
-                                     WHERE id = ?''',
-                                  (new_status, 
-                                   datetime.now().strftime("%Y-%m-%d %H:%M:%S") if new_status == 'confirmed' else None,
-                                   existing_id))
-                        updated_count += 1
+                        confirmed_at = None
+                        invited_at = None
                         
-                        status_text_map = {
-                            'confirmed': "✅ Подтвержден",
-                            'rejected': "❌ Отклонен",
-                            'pending': "⏳ Ожидает"
-                        }
+                        if new_status == 'confirmed':
+                            confirmed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        elif new_status == 'invited':
+                            invited_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        
+                        c.execute('''UPDATE couriers 
+                                     SET status = ?, confirmed_at = ?, invited_at = ? 
+                                     WHERE id = ?''',
+                                  (new_status, confirmed_at, invited_at, existing_id))
+                        updated_count += 1
+                        logger.info(f"🔄 Статус изменен: {full_name} -> {new_status}")
+                        
+                        # Отправляем уведомление рекрутеру
+                        notify_recruiter_about_status_change(recruiter_id, full_name, city, new_status, reject_reason)
+                        
+                        # Обновляем статус в таблице Google Sheets
                         if existing_sheet_row:
-                            update_courier_status_in_sheet(existing_sheet_row, status_text_map.get(new_status, "⏳ Ожидает"))
+                            update_courier_status_in_sheet(existing_sheet_row, status_text_map)
                     
+                    # Обновляем баланс
                     if existing_balance != balance:
                         c.execute("UPDATE couriers SET balance = ? WHERE id = ?", (balance, existing_id))
                         balance_updated_count += 1
                     
+                    # Обновляем количество заказов
                     if existing_orders != orders_completed:
                         c.execute("UPDATE couriers SET orders_completed = ? WHERE id = ?", (orders_completed, existing_id))
                         orders_updated_count += 1
+                    
+                    # Обновляем причину отказа
+                    if reject_reason and (not existing_reject_reason or existing_reject_reason != reject_reason):
+                        c.execute("UPDATE couriers SET reject_reason = ? WHERE id = ?", (reject_reason, existing_id))
                     
                     if existing_sheet_row != sheet_row:
                         c.execute("UPDATE couriers SET sheet_row = ? WHERE id = ?", (sheet_row, existing_id))
                 
                 else:
+                    # Новый курьер
                     registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     confirmed_at = registered_at if new_status == 'confirmed' else None
+                    invited_at = registered_at if new_status == 'invited' else None
                     
                     c.execute('''INSERT INTO couriers 
-                                 (recruiter_id, full_name, city, status, balance, registered_at, confirmed_at, sheet_row, orders_completed) 
-                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                              (recruiter_id, full_name, city, new_status, balance, registered_at, confirmed_at, sheet_row, orders_completed))
+                                 (recruiter_id, full_name, city, status, balance, registered_at, 
+                                  confirmed_at, invited_at, sheet_row, orders_completed, reject_reason) 
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                              (recruiter_id, full_name, city, new_status, balance, registered_at, 
+                               confirmed_at, invited_at, sheet_row, orders_completed, reject_reason))
                     new_count += 1
+                    logger.info(f"✅ Новый курьер: {full_name} со статусом {new_status}")
+                    
+                    # Если статус не "pending", отправляем уведомление
+                    if new_status != 'pending':
+                        notify_recruiter_about_status_change(recruiter_id, full_name, city, new_status, reject_reason)
+                    
+                    # Обновляем статус в таблице если нужно
+                    if new_status != 'pending' and sheet_row:
+                        update_courier_status_in_sheet(sheet_row, status_text_map)
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка при обработке строки {i+2}: {e}")
                 continue
         
-        # УДАЛЯЕМ курьеров, которых нет в таблице
+        # Удаляем курьеров, которых нет в таблице
         c.execute("SELECT id, full_name, city FROM couriers WHERE recruiter_id = ?", (ADMIN_ID,))
         db_couriers = c.fetchall()
         
@@ -3591,6 +3725,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
