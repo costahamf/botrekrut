@@ -1777,7 +1777,7 @@ async def admin_withdrawal_confirm(update: Update, context: ContextTypes.DEFAULT
                 f"✅ *Заявка на вывод подтверждена!*\n\n"
                 f"🆔 Номер заявки: `{request_id}`\n"
                 f"💰 Сумма: {amount} руб.\n\n"
-                f"Средства будут переведены в ближайшее время."
+                f"Средства поступят не раньше 10-15 числа каждого месяца"
             )
             await context.bot.send_message(
                 chat_id=user_id,
@@ -3428,6 +3428,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
