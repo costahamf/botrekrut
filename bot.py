@@ -26,7 +26,13 @@ logger = logging.getLogger(__name__)
 TOKEN = '8685226609:AAEA8vHoWELRP7_KwXfV9Qbpq1usLUfdJ6o'
 
 # ID администратора
-ADMIN_ID = [860845946, 745565559]
+ADMIN_ID = 860845946
+ADMIN2_ID = 745565559 
+ADMINS = [ADMIN_ID, ADMIN2_ID]  
+
+# Функция проверки админа
+def is_admin(user_id):
+    return user_id in ADMINS
 
 # URL для личного кабинета
 PERSONAL_ACCOUNT_URL = "https://partners-app.yandex.ru/team_ref/8647844ed8ee4d0eb3d60155113dafb1?locale=ru"
@@ -1090,13 +1096,13 @@ def check_pending_couriers():
                 balance_raw = record.get('Баланс', '0')
                 accepted_raw = record.get('ПРИНЯТО', '0')
                 rejected_raw = record.get('ОТКЛОНЕНО', '0')
-                invited_raw = record.get('Приглашен в хаб', '0')  # НОВЫЙ СТОЛБЕЦ
+                invited_raw = record.get('Приглашен в хаб', '0')
                 orders_raw = record.get('Выполнено заказов', '0')
                 reject_reason_raw = record.get('Причина отказа', '')
                 
                 accepted = str(accepted_raw).strip()
                 rejected = str(rejected_raw).strip()
-                invited = str(invited_raw).strip()  # НОВОЕ
+                invited = str(invited_raw).strip()
                 
                 try:
                     balance_str = str(balance_raw).strip().replace(' ', '').replace(',', '.')
@@ -1115,20 +1121,16 @@ def check_pending_couriers():
                 sheet_row = i + 2
                 
                 # ОПРЕДЕЛЯЕМ СТАТУС ПО ПРИОРИТЕТУ:
-                # 1. Сначала проверяем "Приглашен в хаб"
                 if invited in ['1', 'true', 'True', 'TRUE', 'yes', 'Yes', 'YES', '✅', '☑']:
                     new_status = 'invited'
                     status_text_map = "🏢 Приглашен в хаб"
-                # 2. Потом проверяем "ПРИНЯТО"
                 elif accepted in ['1', 'true', 'True', 'TRUE', 'yes', 'Yes', 'YES', '✅', '☑']:
                     new_status = 'confirmed'
                     status_text_map = "✅ Подтвержден"
-                # 3. Потом проверяем "ОТКЛОНЕНО"
                 elif rejected in ['1', 'true', 'True', 'TRUE', 'yes', 'Yes', 'YES', '❌']:
                     new_status = 'rejected'
                     status_text_map = "❌ Отклонен"
                 else:
-                    # Если ничего не проставлено - проверяем по тексту статуса
                     if 'Подтвержден' in status_text or '✅' in status_text:
                         new_status = 'confirmed'
                         status_text_map = "✅ Подтвержден"
@@ -1150,8 +1152,12 @@ def check_pending_couriers():
                     if user:
                         recruiter_id = user[0]
                 
-                if not recruiter_id and recruiter_username in ['unknownsorcerer', 'costa']:
-                    recruiter_id = ADMIN_ID
+                # Проверяем для всех админов
+                if not recruiter_id:
+                    for admin_id in ADMINS:
+                        if recruiter_username in ['unknownsorcerer', 'costa'] or str(admin_id) in recruiter_username:
+                            recruiter_id = admin_id
+                            break
                 
                 if not recruiter_id:
                     continue
@@ -1232,19 +1238,21 @@ def check_pending_couriers():
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка при обработке строки {i+2}: {e}")
+                logger.error(traceback.format_exc())
                 continue
         
         # Удаляем курьеров, которых нет в таблице
-        c.execute("SELECT id, full_name, city FROM couriers WHERE recruiter_id = ?", (ADMIN_ID,))
-        db_couriers = c.fetchall()
-        
-        deleted_count = 0
-        for courier in db_couriers:
-            courier_id, full_name, city = courier
-            if (full_name, city) not in existing_couriers:
-                c.execute("DELETE FROM couriers WHERE id = ?", (courier_id,))
-                deleted_count += 1
-                logger.info(f"🗑️ Удален курьер из БД: {full_name} ({city})")
+        # ВАЖНО: для каждого админа проверяем отдельно
+        for admin_id in ADMINS:
+            c.execute("SELECT id, full_name, city FROM couriers WHERE recruiter_id = ?", (admin_id,))
+            db_couriers = c.fetchall()
+            
+            for courier in db_couriers:
+                courier_id, full_name, city = courier
+                if (full_name, city) not in existing_couriers:
+                    c.execute("DELETE FROM couriers WHERE id = ?", (courier_id,))
+                    deleted_count += 1
+                    logger.info(f"🗑️ Удален курьер из БД: {full_name} ({city}) для админа {admin_id}")
         
         conn.commit()
         
@@ -2094,7 +2102,7 @@ async def admin_withdrawal_confirm(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     await query.answer()
     
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):
         await query.edit_message_text("❌ У вас нет прав администратора")
         return
     
@@ -2126,7 +2134,7 @@ async def admin_withdrawal_reject_start(update: Update, context: ContextTypes.DE
     query = update.callback_query
     await query.answer()
     
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         await query.edit_message_text("❌ У вас нет прав администратора")
         return
     
@@ -2137,9 +2145,8 @@ async def admin_withdrawal_reject_start(update: Update, context: ContextTypes.DE
         f"📝 Введите причину отказа для заявки #{request_id}:",
         parse_mode='Markdown'
     )
-
 async def handle_withdrawal_reject_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         return
     
     request_id = context.user_data.get('rejecting_withdrawal')
@@ -2179,7 +2186,7 @@ async def admin_message_user_start(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     await query.answer()
     
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):
         await query.edit_message_text("❌ У вас нет прав администратора")
         return
     
@@ -2224,7 +2231,7 @@ async def admin_message_user_send(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     await query.answer()
     
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         return
     
     user_id = int(query.data.replace('msg_', ''))
@@ -2239,7 +2246,7 @@ async def admin_message_user_send(update: Update, context: ContextTypes.DEFAULT_
 
 async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отправляет личное сообщение выбранному пользователю"""
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         return
     
     target_user_id = context.user_data.get('message_target_user')
@@ -2342,7 +2349,7 @@ async def admin_reply_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
     
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         await query.edit_message_text("❌ У вас нет прав администратора")
         return
     
@@ -2358,7 +2365,7 @@ async def admin_close_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
     
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         await query.edit_message_text("❌ У вас нет прав администратора")
         return
     
@@ -2382,7 +2389,7 @@ async def admin_close_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text("❌ Тикет не найден")
 
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         return
     
     ticket_id = context.user_data.get('replying_to_ticket')
@@ -2416,7 +2423,6 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("❌ Тикет не найден")
     
     context.user_data['replying_to_ticket'] = None
-
 # ========== ЛИЧНЫЙ КАБИНЕТ ==========
 async def personal_account_menu(query, user_id, context):
     keyboard = [
@@ -3154,7 +3160,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== АДМИН-КОМАНДЫ ==========
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Панель администратора со всеми командами"""
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):
         await update.message.reply_text("❌ У вас нет прав администратора")
         return
     
@@ -3193,7 +3199,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Принудительная синхронизация статусов с Google Sheets"""
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):
         await update.message.reply_text("❌ У вас нет прав администратора")
         return
     
@@ -3218,10 +3224,10 @@ async def admin_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка синхронизации: {str(e)}")
-
+        
 async def admin_check_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Проверка файла БД"""
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):
         return
     
     try:
@@ -3265,7 +3271,7 @@ async def admin_check_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_check_couriers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Проверка всех курьеров в БД"""
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         return
     
     try:
@@ -3304,10 +3310,10 @@ async def admin_check_couriers(update: Update, context: ContextTypes.DEFAULT_TYP
         
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
-
+        
 async def admin_withdrawals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Просмотр всех заявок на вывод"""
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         await update.message.reply_text("❌ У вас нет прав администратора")
         return
     
@@ -3339,10 +3345,9 @@ async def admin_withdrawals(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(text[i:i+4000], parse_mode='Markdown')
     else:
         await update.message.reply_text(text, parse_mode='Markdown')
-
 async def admin_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Просмотр всех тикетов поддержки"""
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         await update.message.reply_text("❌ У вас нет прав администратора")
         return
     
@@ -3372,10 +3377,9 @@ async def admin_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(text[i:i+4000], parse_mode='Markdown')
     else:
         await update.message.reply_text(text, parse_mode='Markdown')
-
 async def admin_fix_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Исправляет баланс конкретного пользователя или всех"""
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         await update.message.reply_text("❌ У вас нет прав администратора")
         return
     
@@ -3437,18 +3441,19 @@ async def admin_fix_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     else:
-        c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (ADMIN_ID,))
+        admin_id = update.effective_user.id  # Берем ID текущего админа
+        c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (admin_id,))
         couriers_sum = c.fetchone()[0] or 0
         
-        c.execute("SELECT SUM(amount) FROM withdrawals WHERE user_id = ? AND status = 'completed'", (ADMIN_ID,))
+        c.execute("SELECT SUM(amount) FROM withdrawals WHERE user_id = ? AND status = 'completed'", (admin_id,))
         withdrawals_sum = c.fetchone()[0] or 0
         
         real_balance = couriers_sum - withdrawals_sum
         
-        c.execute("SELECT full_name, city, balance FROM couriers WHERE recruiter_id = ?", (ADMIN_ID,))
+        c.execute("SELECT full_name, city, balance FROM couriers WHERE recruiter_id = ?", (admin_id,))
         couriers = c.fetchall()
         
-        c.execute("SELECT amount, status, request_date FROM withdrawals WHERE user_id = ? ORDER BY request_date DESC LIMIT 5", (ADMIN_ID,))
+        c.execute("SELECT amount, status, request_date FROM withdrawals WHERE user_id = ? ORDER BY request_date DESC LIMIT 5", (admin_id,))
         withdrawals = c.fetchall()
         
         text = f"💰 *Твой текущий баланс:* {real_balance} руб.\n\n"
@@ -3474,10 +3479,9 @@ async def admin_fix_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += "`/fixbalance all` - исправить балансы всех пользователей"
         
         await update.message.reply_text(text, parse_mode='Markdown')
-
 async def admin_user_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает детальный баланс пользователя"""
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         await update.message.reply_text("❌ У вас нет прав администратора")
         return
     
@@ -3553,26 +3557,29 @@ async def admin_user_balance(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def admin_fix_my_couriers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Исправляет только курьеров, созданных через бота"""
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):
         return
     
     try:
         conn = get_db()
         c = conn.cursor()
         
+        # Исправляем для текущего админа
+        admin_id = update.effective_user.id
+        
         c.execute('''
             UPDATE couriers 
             SET recruiter_id = ? 
             WHERE recruiter_id IS NULL 
             AND sheet_row IS NOT NULL
-        ''', (ADMIN_ID,))
+        ''', (admin_id,))
         
         updated = c.rowcount
         conn.commit()
         
         await update.message.reply_text(
             f"✅ Исправлено {updated} курьеров!\n"
-            f"Теперь они привязаны к твоему ID ({ADMIN_ID})"
+            f"Теперь они привязаны к твоему ID ({admin_id})"
         )
         
         await admin_check_couriers(update, context)
@@ -3582,25 +3589,29 @@ async def admin_fix_my_couriers(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def admin_fix_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Исправляет фейковых пользователей на реальные данные"""
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         return
     
     try:
         conn = get_db()
         c = conn.cursor()
         
+        admin_id = update.effective_user.id
+        admin_username = update.effective_user.username or "admin"
+        admin_first_name = update.effective_user.first_name or "Admin"
+        
         c.execute('''
             UPDATE users 
             SET username = ?, first_name = ? 
             WHERE user_id = ?
-        ''', ("unknownsorcerer", "costa", ADMIN_ID))
+        ''', (admin_username, admin_first_name, admin_id))
         
         updated = c.rowcount
         conn.commit()
         
         await update.message.reply_text(
-            f"✅ Исправлен пользователь с ID {ADMIN_ID}\n"
-            f"Теперь username: @unknownsorcerer, имя: costa"
+            f"✅ Исправлен пользователь с ID {admin_id}\n"
+            f"Теперь username: @{admin_username}, имя: {admin_first_name}"
         )
         
     except Exception as e:
@@ -3608,7 +3619,7 @@ async def admin_fix_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Тестовая команда для проверки Google Sheets"""
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         await update.message.reply_text("❌ Только для админа")
         return
     
@@ -3663,10 +3674,9 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
     except Exception as e:
         await update.message.reply_text(f"❌ Общая ошибка: {str(e)}")
-
 async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Рассылка сообщений всем пользователям"""
-    if update.effective_user.id != ADMIN_ID:
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         await update.message.reply_text("❌ У вас нет прав администратора")
         return
     
@@ -3760,6 +3770,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
