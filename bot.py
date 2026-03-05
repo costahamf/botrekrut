@@ -1649,7 +1649,7 @@ async def send_and_track(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
             chat_id=chat_id,
             text=text,
             reply_markup=reply_markup,
-            parse_mode=parse_mode
+            parse_mode=parse_mode  # Теперь parse_mode может быть None
         )
         
         context.user_data['last_bot_message_id'] = message.message_id
@@ -2329,13 +2329,14 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
         message_text
     )
     
+    # Отправляем подтверждение пользователю БЕЗ Markdown разметки
     await send_and_track(
         update, context,
-        f"✅ *Ваше обращение принято!*\n\n"
-        f"🆔 Номер обращения: `{ticket_id}`\n"
+        f"✅ Ваше обращение принято!\n\n"
+        f"🆔 Номер обращения: {ticket_id}\n"
         f"⏱ Ожидаемое время ответа: от 15 минут до 1 часа\n\n"
-        f"Как только администратор ответит, вы получите уведомление.",
-        parse_mode='Markdown'
+        f"Как только администратор ответит, вы получите уведомление."
+        # Убрали parse_mode='Markdown'
     )
     
     keyboard = [
@@ -2343,13 +2344,16 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
         [InlineKeyboardButton("✅ Закрыть", callback_data=f'admin_close_{ticket_id}')]
     ]
     
+    # Экранируем спецсимволы в сообщении пользователя для Markdown
+    escaped_message = message_text.replace('_', '\\_').replace('*', '\\*').replace('`', '\\`').replace('[', '\\[')
+    
     admin_message = (
         f"🆘 *НОВОЕ ОБРАЩЕНИЕ В ПОДДЕРЖКУ*\n\n"
         f"🆔 *Тикет:* `{ticket_id}`\n"
         f"👤 *Пользователь:* {user.first_name} (@{user.username})\n"
         f"🆔 *User ID:* `{user.id}`\n"
         f"📅 *Время:* {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
-        f"📝 *Сообщение:*\n{message_text}"
+        f"📝 *Сообщение:*\n{escaped_message}"
     )
     
     await context.bot.send_message(
@@ -3786,6 +3790,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
