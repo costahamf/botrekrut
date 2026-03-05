@@ -2473,13 +2473,18 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data['replying_to_ticket'] = None
 # ========== ЛИЧНЫЙ КАБИНЕТ ==========
 async def personal_account_menu(query, user_id, context):
+    text = (
+        "👤 *Личный кабинет*\n\n"
+        "Выберите действие или используйте ссылку для курьера:\n\n"
+        "🔗 *Ссылка для курьера:*\n"
+        "https://reg.eda.yandex.ru/?advertisement_campaign=forms_for_agents&user_invite_code=f570ca2872604481884bbe72291d8ec5&utm_content=blank\n"
+    )
+    
     keyboard = [
         [InlineKeyboardButton("👥 Список моих курьеров", callback_data='my_couriers')],
         [InlineKeyboardButton("📝 Записать курьера", callback_data='add_courier')],
         [InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]
     ]
-    
-    text = "👤 *Личный кабинет*\n\nВыберите действие:"
     
     if query.message.photo:
         await query.message.delete()
@@ -3817,6 +3822,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
