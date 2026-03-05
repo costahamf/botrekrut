@@ -300,8 +300,9 @@ def can_take_test(user_id):
             now = datetime.now()
             time_diff = now - last_attempt
             
-            if time_diff < timedelta(minutes=30):
-                remaining = 30 - int(time_diff.total_seconds() / 60)
+            # МЕНЯЕМ 30 на 5 минут
+            if time_diff < timedelta(minutes=5):
+                remaining = 5 - int(time_diff.total_seconds() / 60)
                 return False, remaining
         
         return True, 0
@@ -2677,7 +2678,7 @@ async def finish_test(query, context):
         text = (
             f"❌ *Тест не пройден*\n\n"
             f"Правильных ответов: *{correct_count} из 10*\n\n"
-            f"⏳ Следующая попытка будет доступна через *30 минут*."
+            f"⏳ Следующая попытка будет доступна через *5 минут*."
         )
         keyboard = [[InlineKeyboardButton("🏠 В главное меню", callback_data='back_to_main')]]
         
@@ -3591,6 +3592,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
