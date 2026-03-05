@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 TOKEN = '8685226609:AAEA8vHoWELRP7_KwXfV9Qbpq1usLUfdJ6o'
 
 # ID администратора
-ADMIN_ID = 860845946
+ADMIN_ID = [860845946, 745565559]
 
 # URL для личного кабинета
 PERSONAL_ACCOUNT_URL = "https://partners-app.yandex.ru/team_ref/8647844ed8ee4d0eb3d60155113dafb1?locale=ru"
@@ -3760,6 +3760,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
