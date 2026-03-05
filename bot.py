@@ -547,6 +547,17 @@ def get_ticket(ticket_id):
     except Exception as e:
         logger.error(f"Ошибка в get_ticket: {e}")
         return None
+def is_ticket_open(ticket_id):
+    """Проверяет, открыт ли тикет"""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT status FROM support_tickets WHERE ticket_id = ?", (ticket_id,))
+        result = c.fetchone()
+        return result and result[0] == 'open'
+    except Exception as e:
+        logger.error(f"Ошибка в is_ticket_open: {e}")
+        return False
 
 def close_ticket(ticket_id, admin_reply):
     conn = get_db()
@@ -2371,21 +2382,22 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
     clean_message = clean_text(message_text)
     
     admin_message = (
-        f"🆘 НОВОЕ ОБРАЩЕНИЕ В ПОДДЕРЖКУ\n\n"
-        f"🆔 Тикет: {ticket_id}\n"
-        f"👤 Пользователь: {clean_first_name} ({clean_username})\n"
-        f"🆔 User ID: {user.id}\n"
-        f"📅 Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
-        f"📝 Сообщение:\n{clean_message}"
+        f"🆘 *НОВОЕ ОБРАЩЕНИЕ В ПОДДЕРЖКУ*\n\n"
+        f"🆔 *Тикет:* `{ticket_id}`\n"
+        f"👤 *Пользователь:* {clean_first_name} ({clean_username})\n"
+        f"🆔 *User ID:* `{user.id}`\n"
+        f"📅 *Время:* {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
+        f"📝 *Сообщение:*\n{clean_message}"
     )
     
-    # ОТПРАВЛЯЕМ ВСЕМ АДМИНИСТРАТОРАМ
+    # Отправляем ВСЕМ администраторам
     for admin_id in ADMINS:
         try:
             await context.bot.send_message(
                 chat_id=admin_id,
                 text=admin_message,
-                reply_markup=InlineKeyboardMarkup(keyboard)
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
             )
             logger.info(f"📨 Уведомление о тикете {ticket_id} отправлено админу {admin_id}")
         except Exception as e:
@@ -2397,62 +2409,122 @@ async def admin_reply_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
     
-    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
+    if not is_admin(update.effective_user.id):
         await query.edit_message_text("❌ У вас нет прав администратора")
         return
     
     ticket_id = query.data.replace('admin_reply_', '')
+    
+    # Проверяем, не ответил ли уже кто-то
+    if not is_ticket_open(ticket_id):
+        await query.edit_message_text(
+            f"❌ Тикет {ticket_id} уже обработан другим администратором.\n"
+            f"Обновите список тикетов командой /tickets"
+        )
+        return
+    
     context.user_data['replying_to_ticket'] = ticket_id
+    admin_name = update.effective_user.first_name or f"Админ {update.effective_user.id}"
+    
+    # Уведомляем других админов, что начат ответ на тикет
+    for admin_id in ADMINS:
+        if admin_id != update.effective_user.id:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"⚠️ *Внимание!*\n\n"
+                         f"Администратор {admin_name} начал отвечать на тикет `{ticket_id}`.\n"
+                         f"Пожалуйста, не отвечайте на этот тикет, чтобы избежать дублирования.",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить админа {admin_id}: {e}")
     
     await query.edit_message_text(
         f"📝 Введите ответ для тикета `{ticket_id}`:",
         parse_mode='Markdown'
     )
-
 async def admin_close_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
+    if not is_admin(update.effective_user.id):
         await query.edit_message_text("❌ У вас нет прав администратора")
         return
     
     ticket_id = query.data.replace('admin_close_', '')
+    
+    # Проверяем, открыт ли тикет
+    if not is_ticket_open(ticket_id):
+        await query.edit_message_text(
+            f"❌ Тикет {ticket_id} уже обработан другим администратором."
+        )
+        return
+    
     ticket = get_ticket(ticket_id)
+    admin_name = update.effective_user.first_name or f"Админ {update.effective_user.id}"
     
     if ticket:
         if close_ticket(ticket_id, "Тикет закрыт администратором"):
+            # Уведомляем пользователя
             try:
                 await context.bot.send_message(
                     chat_id=ticket[1],
-                    text=f"🆘 *Обращение #{ticket_id} закрыто*\n\nВаш тикет был закрыт администратором.",
+                    text=f"🆘 *Обращение #{ticket_id} закрыто*\n\n"
+                         f"Ваш тикет был закрыт администратором {admin_name}.",
                     parse_mode='Markdown'
                 )
             except Exception as e:
                 logger.error(f"❌ Не удалось уведомить пользователя: {e}")
+            
+            # Уведомляем всех админов о закрытии
+            for admin_id in ADMINS:
+                if admin_id != update.effective_user.id:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=admin_id,
+                            text=f"✅ Тикет `{ticket_id}` был закрыт администратором {admin_name}",
+                            parse_mode='Markdown'
+                        )
+                    except:
+                        pass
+            
             await query.edit_message_text(f"✅ Тикет {ticket_id} закрыт")
         else:
             await query.edit_message_text(f"❌ Ошибка при закрытии тикета {ticket_id}")
     else:
         await query.edit_message_text("❌ Тикет не найден")
-
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
+    if not is_admin(update.effective_user.id):
         return
     
     ticket_id = context.user_data.get('replying_to_ticket')
     if not ticket_id:
         return
     
+    # Двойная проверка - вдруг кто-то успел ответить, пока мы писали
+    if not is_ticket_open(ticket_id):
+        await update.message.reply_text(
+            f"❌ Тикет {ticket_id} уже обработан другим администратором.\n"
+            f"Ваш ответ не был отправлен."
+        )
+        context.user_data['replying_to_ticket'] = None
+        return
+    
     reply_text = update.message.text
     ticket = get_ticket(ticket_id)
+    admin_name = update.effective_user.first_name or f"Админ {update.effective_user.id}"
     
     if ticket:
         if close_ticket(ticket_id, reply_text):
+            # Очищаем данные о ответе
+            context.user_data['replying_to_ticket'] = None
+            
+            # Отправляем ответ пользователю
             user_message = (
                 f"🆘 *Ответ на обращение #{ticket_id}*\n\n"
                 f"📝 *Ваш вопрос:*\n{ticket[4]}\n\n"
-                f"💬 *Ответ администратора:*\n{reply_text}\n\n"
+                f"💬 *Ответ администратора ({admin_name}):*\n{reply_text}\n\n"
                 f"⏱ Время ответа: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
             )
             
@@ -2462,7 +2534,23 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     text=user_message,
                     parse_mode='Markdown'
                 )
+                
+                # Уведомляем ВСЕХ админов об ответе (кроме текущего)
+                for admin_id in ADMINS:
+                    if admin_id != update.effective_user.id:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=admin_id,
+                                text=f"✅ *Тикет закрыт*\n\n"
+                                     f"Администратор {admin_name} ответил на тикет `{ticket_id}`.\n\n"
+                                     f"💬 *Ответ:*\n{reply_text[:200]}..." if len(reply_text) > 200 else f"💬 *Ответ:*\n{reply_text}",
+                                parse_mode='Markdown'
+                            )
+                        except Exception as e:
+                            logger.error(f"Не удалось уведомить админа {admin_id}: {e}")
+                
                 await update.message.reply_text(f"✅ Ответ на тикет {ticket_id} отправлен пользователю")
+                
             except Exception as e:
                 await update.message.reply_text(f"❌ Не удалось отправить ответ пользователю: {e}")
         else:
@@ -3822,6 +3910,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
