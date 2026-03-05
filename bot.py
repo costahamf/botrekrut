@@ -723,18 +723,23 @@ def update_test_status(user_id, passed):
         conn = get_db()
         c = conn.cursor()
         
+        # Проверяем, есть ли пользователь
         c.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
         if not c.fetchone():
             logger.warning(f"⚠️ Пользователь {user_id} не найден в БД")
             return
         
+        # Обновляем статус
         c.execute("""UPDATE users 
                      SET test_passed = ?, last_test_attempt = ? 
                      WHERE user_id = ?""",
                   (1 if passed else 0, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
         conn.commit()
         
-        logger.info(f"✅ Обновлен test_passed для user_id={user_id} на {1 if passed else 0}")
+        # Проверяем, что обновилось
+        c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
+        new_value = c.fetchone()[0]
+        logger.info(f"✅ Обновлен test_passed для user_id={user_id} на {new_value}")
         
     except Exception as e:
         logger.error(f"Ошибка в update_test_status: {e}")
@@ -2303,12 +2308,25 @@ async def finish_test(query, context):
     correct_count = sum(1 for a in answers if a)
     user_id = query.from_user.id
     
+    logger.info(f"🎯 Завершение теста для пользователя {user_id}, правильных ответов: {correct_count}")
+    
     if correct_count >= 7:
+        # Тест сдан успешно
+        logger.info(f"✅ Пользователь {user_id} сдал тест")
         update_test_status(user_id, True)
+        
+        # Очищаем данные теста
+        context.user_data.pop('test_answers', None)
+        context.user_data.pop('test_current', None)
+        context.user_data.pop('test_questions', None)
+        
+        # Показываем главное меню
         await back_to_main(query, user_id, context)
         return
         
     elif correct_count < 3:
+        # Полный провал
+        logger.info(f"❌ Пользователь {user_id} провалил тест")
         update_test_status(user_id, False)
         text = (
             f"❌ *Тест не пройден*\n\n"
@@ -2317,6 +2335,8 @@ async def finish_test(query, context):
         )
         keyboard = [[InlineKeyboardButton("🏠 В главное меню", callback_data='back_to_main')]]
     else:
+        # Можно попробовать снова
+        logger.info(f"⚠️ Пользователь {user_id} не сдал тест, но может попробовать снова")
         update_test_status(user_id, False)
         text = (
             f"⚠️ *Тест не пройден*\n\n"
@@ -2325,13 +2345,13 @@ async def finish_test(query, context):
         )
         keyboard = [[InlineKeyboardButton("📝 Пройти тест заново", callback_data='take_test')]]
     
+    # Очищаем данные теста
     context.user_data.pop('test_answers', None)
     context.user_data.pop('test_current', None)
     context.user_data.pop('test_questions', None)
     
-    # ВАЖНО: Проверяем, есть ли у сообщения фото
+    # Отправляем результат
     if query.message.photo:
-        logger.info("🖼️ Завершение теста с фото, отправляем результат")
         await query.message.delete()
         await context.bot.send_message(
             chat_id=query.message.chat_id,
@@ -2340,7 +2360,6 @@ async def finish_test(query, context):
             parse_mode='Markdown'
         )
     else:
-        logger.info("📝 Завершение теста с текстом, редактируем")
         await query.edit_message_text(
             text=text,
             reply_markup=InlineKeyboardMarkup(keyboard),
@@ -2531,6 +2550,8 @@ async def back_to_main(query, user_id, context):
     c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
     result = c.fetchone()
     test_passed = result[0] if result else 0
+    
+    logger.info(f"🏠 Возврат в главное меню для пользователя {user_id}, test_passed={test_passed}")
     
     await query.message.delete()
     
@@ -3191,6 +3212,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
