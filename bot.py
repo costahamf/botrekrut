@@ -102,7 +102,7 @@ def init_database():
                   admin_reply TEXT,
                   FOREIGN KEY (user_id) REFERENCES users(user_id))''')
     
-    # Таблица курьеров
+    # Таблица курьеров с новым полем orders_completed
     c.execute('''CREATE TABLE IF NOT EXISTS couriers
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   recruiter_id INTEGER,
@@ -113,7 +113,16 @@ def init_database():
                   registered_at TEXT,
                   confirmed_at TEXT,
                   sheet_row INTEGER,
+                  orders_completed INTEGER DEFAULT 0,
                   FOREIGN KEY (recruiter_id) REFERENCES users(user_id))''')
+    
+    # Проверяем, есть ли уже поле orders_completed в существующей таблице
+    try:
+        c.execute("SELECT orders_completed FROM couriers LIMIT 1")
+    except sqlite3.OperationalError:
+        # Если поля нет, добавляем его
+        c.execute("ALTER TABLE couriers ADD COLUMN orders_completed INTEGER DEFAULT 0")
+        logger.info("✅ Добавлено поле orders_completed в таблицу couriers")
     
     conn.commit()
     logger.info("✅ Таблицы созданы/проверены")
@@ -132,7 +141,7 @@ def init_database():
         logger.error(f"❌ Ошибка при пересчете балансов: {e}")
     
     logger.info("✅ База данных инициализирована")
-
+    
 # ========== ФУНКЦИИ ДЛЯ ПЕРЕСЧЕТА БАЛАНСОВ ==========
 def recalc_all_balances():
     """Пересчитывает балансы всех пользователей"""
@@ -590,7 +599,7 @@ def get_recruiter_couriers(recruiter_id):
     try:
         conn = get_db()
         c = conn.cursor()
-        c.execute('''SELECT full_name, city, status, registered_at, confirmed_at, balance 
+        c.execute('''SELECT full_name, city, status, registered_at, confirmed_at, balance, orders_completed 
                      FROM couriers 
                      WHERE recruiter_id = ? 
                      ORDER BY registered_at DESC''', (recruiter_id,))
@@ -731,17 +740,20 @@ def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, c
         if not sheet:
             return None, None
         
+        # Ваши существующие столбцы + новый
         row = [
-            datetime.now().strftime("%d.%m.%Y %H:%M"),
-            recruiter_name,
-            f"@{recruiter_username}" if recruiter_username else "-",
-            full_name,
-            city,
-            "⏳ Ожидает",
-            0,
-            0,
-            0
+            datetime.now().strftime("%d.%m.%Y %H:%M"),  # Дата и время
+            recruiter_name,                              # Имя рекрутера
+            f"@{recruiter_username}" if recruiter_username else "-",  # Username рекрутера
+            full_name,                                   # ФИО клиента
+            city,                                        # Город
+            "⏳ Ожидает",                                 # СТАТУС
+            0,                                           # Баланс
+            0,                                           # ПРИНЯТО
+            0,                                           # ОТКЛОНЕНО
+            0                                            # Выполнено заказов (НОВЫЙ СТОЛБЕЦ)
         ]
+        
         sheet.append_row(row, value_input_option='USER_ENTERED')
         
         time.sleep(2)
@@ -786,6 +798,7 @@ def check_pending_couriers():
         updated_count = 0
         new_count = 0
         balance_updated_count = 0
+        orders_updated_count = 0
         
         for i, record in enumerate(records):
             try:
@@ -799,6 +812,9 @@ def check_pending_couriers():
                 accepted_raw = record.get('ПРИНЯТО', '0')
                 rejected_raw = record.get('ОТКЛОНЕНО', '0')
                 
+                # НОВОЕ: получаем количество выполненных заказов
+                orders_raw = record.get('Выполнено заказов', '0')
+                
                 accepted = str(accepted_raw).strip()
                 rejected = str(rejected_raw).strip()
                 
@@ -810,6 +826,16 @@ def check_pending_couriers():
                         balance = 0.0
                 except Exception as e:
                     balance = 0.0
+                
+                # НОВОЕ: преобразуем количество заказов в число
+                try:
+                    orders_str = str(orders_raw).strip().replace(' ', '')
+                    if orders_str and orders_str != '0' and orders_str != '':
+                        orders_completed = int(float(orders_str))  # на случай если там число с плавающей точкой
+                    else:
+                        orders_completed = 0
+                except Exception as e:
+                    orders_completed = 0
                 
                 sheet_row = i + 2
                 
@@ -845,13 +871,13 @@ def check_pending_couriers():
                     continue
                 
                 # Ищем курьера в БД
-                c.execute('''SELECT id, status, sheet_row, balance FROM couriers 
+                c.execute('''SELECT id, status, sheet_row, balance, orders_completed FROM couriers 
                              WHERE full_name = ? AND city = ? ORDER BY id DESC LIMIT 1''',
                           (full_name, city))
                 existing = c.fetchone()
                 
                 if existing:
-                    existing_id, existing_status, existing_sheet_row, existing_balance = existing
+                    existing_id, existing_status, existing_sheet_row, existing_balance, existing_orders = existing
                     
                     if existing_status != new_status:
                         c.execute('''UPDATE couriers 
@@ -876,6 +902,12 @@ def check_pending_couriers():
                         balance_updated_count += 1
                         logger.info(f"💰 Обновлен баланс курьера {full_name}: {existing_balance} -> {balance}")
                     
+                    # НОВОЕ: обновляем количество выполненных заказов
+                    if existing_orders != orders_completed:
+                        c.execute("UPDATE couriers SET orders_completed = ? WHERE id = ?", (orders_completed, existing_id))
+                        orders_updated_count += 1
+                        logger.info(f"📊 Обновлены заказы курьера {full_name}: {existing_orders} -> {orders_completed}")
+                    
                     if existing_sheet_row != sheet_row:
                         c.execute("UPDATE couriers SET sheet_row = ? WHERE id = ?", (sheet_row, existing_id))
                 
@@ -884,11 +916,11 @@ def check_pending_couriers():
                     confirmed_at = registered_at if new_status == 'confirmed' else None
                     
                     c.execute('''INSERT INTO couriers 
-                                 (recruiter_id, full_name, city, status, balance, registered_at, confirmed_at, sheet_row) 
-                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                              (recruiter_id, full_name, city, new_status, balance, registered_at, confirmed_at, sheet_row))
+                                 (recruiter_id, full_name, city, status, balance, registered_at, confirmed_at, sheet_row, orders_completed) 
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                              (recruiter_id, full_name, city, new_status, balance, registered_at, confirmed_at, sheet_row, orders_completed))
                     new_count += 1
-                    logger.info(f"✅ Добавлен новый курьер в БД: {full_name}")
+                    logger.info(f"✅ Добавлен новый курьер в БД: {full_name} (заказов: {orders_completed})")
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка при обработке строки {i+2}: {e}")
@@ -904,11 +936,11 @@ def check_pending_couriers():
         logger.info(f"   • Обновлено статусов: {updated_count}")
         logger.info(f"   • Добавлено новых: {new_count}")
         logger.info(f"   • Обновлено балансов: {balance_updated_count}")
+        logger.info(f"   • Обновлено заказов: {orders_updated_count}")
         
     except Exception as e:
         logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
         logger.error(traceback.format_exc())
-
 def load_from_google_sheets():
     """Загружает курьеров из Google Sheets в БД при старте"""
     try:
@@ -936,6 +968,9 @@ def load_from_google_sheets():
                 
                 balance_raw = record.get('Баланс', '0')
                 
+                # НОВОЕ: получаем количество выполненных заказов
+                orders_raw = record.get('Выполнено заказов', '0')
+                
                 try:
                     balance_str = str(balance_raw).strip().replace(' ', '').replace(',', '.')
                     if balance_str and balance_str != '0':
@@ -944,6 +979,16 @@ def load_from_google_sheets():
                         balance = 0.0
                 except Exception as e:
                     balance = 0.0
+                
+                # НОВОЕ: преобразуем количество заказов
+                try:
+                    orders_str = str(orders_raw).strip().replace(' ', '')
+                    if orders_str and orders_str != '0':
+                        orders_completed = int(float(orders_str))
+                    else:
+                        orders_completed = 0
+                except Exception as e:
+                    orders_completed = 0
                 
                 if not full_name or not city:
                     continue
@@ -969,18 +1014,18 @@ def load_from_google_sheets():
                     recruiter_id = ADMIN_ID
                 
                 if recruiter_id:
-                    c.execute('''SELECT id, status, balance FROM couriers 
+                    c.execute('''SELECT id, status, balance, orders_completed FROM couriers 
                                  WHERE full_name = ? AND city = ?''', (full_name, city))
                     existing = c.fetchone()
                     
                     if existing:
-                        existing_id, existing_status, existing_balance = existing
+                        existing_id, existing_status, existing_balance, existing_orders = existing
                         
                         c.execute('''
                             UPDATE couriers 
-                            SET status = ?, balance = ?, sheet_row = ?, recruiter_id = ?
+                            SET status = ?, balance = ?, sheet_row = ?, recruiter_id = ?, orders_completed = ?
                             WHERE id = ?
-                        ''', (status, balance, i + 2, recruiter_id, existing_id))
+                        ''', (status, balance, i + 2, recruiter_id, orders_completed, existing_id))
                         updated_count += 1
                         
                         if status == 'confirmed' and existing_status != 'confirmed':
@@ -989,15 +1034,18 @@ def load_from_google_sheets():
                                 SET confirmed_at = ? 
                                 WHERE id = ?
                             ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), existing_id))
+                        
+                        if existing_orders != orders_completed:
+                            logger.info(f"📊 Обновлены заказы {full_name}: {existing_orders} -> {orders_completed}")
                     else:
                         registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         confirmed_at = registered_at if status == 'confirmed' else None
                         
                         c.execute('''
                             INSERT INTO couriers 
-                            (recruiter_id, full_name, city, status, balance, registered_at, confirmed_at, sheet_row) 
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        ''', (recruiter_id, full_name, city, status, balance, registered_at, confirmed_at, i + 2))
+                            (recruiter_id, full_name, city, status, balance, registered_at, confirmed_at, sheet_row, orders_completed) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (recruiter_id, full_name, city, status, balance, registered_at, confirmed_at, i + 2, orders_completed))
                         new_count += 1
                 
             except Exception as e:
@@ -2052,7 +2100,7 @@ async def show_my_couriers(query, user_id, context):
         text = f"📭 *У вас пока нет записанных курьеров*\n\n💰 *Общий баланс:* {total_balance} руб."
     else:
         text = f"👥 *Ваши курьеры:*\n\n💰 *Общий баланс:* {total_balance} руб.\n\n"
-        for full_name, city, status, reg_date, conf_date, balance in couriers:
+        for full_name, city, status, reg_date, conf_date, balance, orders_completed in couriers:
             date_obj = datetime.strptime(reg_date, "%Y-%m-%d %H:%M:%S")
             date_str = date_obj.strftime("%d.%m.%Y")
             
@@ -2072,7 +2120,8 @@ async def show_my_couriers(query, user_id, context):
             
             text += f"{status_emoji} *{full_name}* — {city}\n"
             text += f"   📅 {date_str}{conf_info}\n"
-            text += f"   💰 Баланс: {balance} руб.\n\n"
+            text += f"   💰 Баланс: {balance} руб.\n"
+            text += f"   📊 *Выполнено заказов: {orders_completed}*\n\n"  # НОВАЯ СТРОКА
     
     keyboard = [
         [InlineKeyboardButton("📝 Записать курьера", callback_data='add_courier')],
@@ -2094,7 +2143,6 @@ async def show_my_couriers(query, user_id, context):
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
-
 async def add_courier_start(query, user_id, context):
     text = (
         "📝 *Запись курьера*\n\n"
@@ -3323,4 +3371,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
