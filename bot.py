@@ -704,21 +704,19 @@ def is_registered(user_id):
     except Exception as e:
         logger.error(f"Ошибка в is_registered: {e}")
         return False
-
 def register_user(user_id, username, first_name, last_name):
     try:
         conn = get_db()
         c = conn.cursor()
         registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         c.execute("""INSERT OR IGNORE INTO users 
-                     (user_id, username, first_name, last_name, registration_date, balance) 
-                     VALUES (?, ?, ?, ?, ?, 0)""",
+                     (user_id, username, first_name, last_name, registration_date, balance, test_passed) 
+                     VALUES (?, ?, ?, ?, ?, 0, 0)""",
                   (user_id, username, first_name, last_name, registration_date))
         conn.commit()
         logger.info(f"✅ Пользователь {user_id} зарегистрирован")
     except Exception as e:
         logger.error(f"Ошибка в register_user: {e}")
-
 def update_test_status(user_id, passed):
     """Обновляет статус теста пользователя"""
     try:
@@ -1322,16 +1320,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     
-    if not is_registered(user_id):
-        register_user(user_id, user.username, user.first_name, user.last_name)
-        await send_menu_photo(
-            update, context,
-            menu_type='test_required',
-            caption=f"👋 Добро пожаловать, {user.first_name}!\n\nВы успешно зарегистрированы в системе."
-        )
-    else:
-        logger.info(f"👤 Пользователь {user_id} уже зарегистрирован")
+    logger.info(f"🚀 Запуск бота для пользователя {user_id}")
     
+    # Проверяем, зарегистрирован ли пользователь
+    if not is_registered(user_id):
+        logger.info(f"📝 Регистрация нового пользователя {user_id}")
+        register_user(user_id, user.username, user.first_name, user.last_name)
+    
+    # Получаем статус теста
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT test_passed FROM users WHERE user_id = ?", (user_id,))
@@ -1340,7 +1336,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"📊 Статус теста пользователя {user_id}: {test_passed}")
     
+    # Удаляем предыдущие сообщения перед отправкой нового
+    await delete_previous_messages(update, context)
+    
+    # Отправляем соответствующее меню
     if test_passed == 1:
+        # Пользователь прошел тест - показываем полное меню
         keyboard = [
             [InlineKeyboardButton("📋 Вся информация", callback_data='all_info')],
             [InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')],
@@ -1358,6 +1359,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard=InlineKeyboardMarkup(keyboard)
         )
     else:
+        # Пользователь не прошел тест - показываем меню с предложением пройти тест
         keyboard = [
             [InlineKeyboardButton("📋 Вся информация", callback_data='all_info')],
             [InlineKeyboardButton("📝 Пройти тест", callback_data='take_test')]
@@ -1370,7 +1372,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption=menu_text,
             keyboard=InlineKeyboardMarkup(keyboard)
         )
-
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -3190,6 +3191,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
