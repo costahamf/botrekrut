@@ -1075,6 +1075,7 @@ def check_pending_couriers():
         new_count = 0
         balance_updated_count = 0
         orders_updated_count = 0
+        deleted_count = 0  # ИНИЦИАЛИЗИРУЕМ ПЕРЕМЕННУЮ
         
         # Множество для отслеживания существующих курьеров
         existing_couriers = set()
@@ -1159,8 +1160,23 @@ def check_pending_couriers():
                             recruiter_id = admin_id
                             break
                 
+                # ЕСЛИ РЕКРУТЕР НЕ НАЙДЕН - ПРОПУСКАЕМ (ИСПРАВЛЕНИЕ FOREIGN KEY)
                 if not recruiter_id:
+                    logger.warning(f"⚠️ Рекрутер не найден для курьера {full_name}, строка пропущена")
                     continue
+                
+                # ПРОВЕРЯЕМ, ЧТО РЕКРУТЕР СУЩЕСТВУЕТ В ТАБЛИЦЕ users
+                c.execute("SELECT user_id FROM users WHERE user_id = ?", (recruiter_id,))
+                if not c.fetchone():
+                    # Если рекрутера нет в БД, создаем его
+                    logger.info(f"👤 Создаем пользователя-рекрутера с ID {recruiter_id}")
+                    registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    c.execute("""
+                        INSERT INTO users 
+                        (user_id, username, first_name, last_name, registration_date, balance, test_passed) 
+                        VALUES (?, ?, ?, ?, ?, 0, 0)
+                    """, (recruiter_id, recruiter_username or f"user_{recruiter_id}", "Рекрутер", "", registration_date))
+                    conn.commit()
                 
                 # Ищем курьера в БД
                 c.execute('''SELECT id, status, sheet_row, balance, orders_completed, reject_reason, invited_at 
@@ -3770,6 +3786,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
