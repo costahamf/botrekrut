@@ -34,9 +34,6 @@ ADMINS = [ADMIN_ID, ADMIN2_ID]
 def is_admin(user_id):
     return user_id in ADMINS
 
-# URL для личного кабинета
-PERSONAL_ACCOUNT_URL = "https://partners-app.yandex.ru/team_ref/8647844ed8ee4d0eb3d60155113dafb1?locale=ru"
-
 # URL для калькулятора дохода
 CALCULATOR_URL = "https://eda.yandex.ru/partner/perf/samara/?utm_medium=cpc&utm_source=yandex-hr&utm_campaign=%5BEDA%5DMX_Courier_RU-ALL-1M_Brand_search_NU%7C73792274&utm_term=49415175552%7C---autotargeting&utm_content=k50id%7C0100000049415175552_49415175552%7Ccid%7C73792274%7Cgid%7C5378729251%7Caid%7C15662855932%7Cadp%7Cno%7Cpos%7Cpremium1%7Csrc%7Csearch_none%7Cdvc%7Cdesktop%7Cmain&etext=2202.H1-umiWOxa1IhaqocPaUS69zT9wHAZdkgZEGqorPY5rJ_ebzkat1FDn2yZO3bEqDYssRPcp0IyJXzD9sTJXJ7293dG14ZXB1Z2VrdW1hemM.0d27564e0c3a01c61971ab0f3d5b481a3ae88ee1&yclid=14506292526793097215"
 
@@ -1312,27 +1309,18 @@ def load_from_google_sheets():
                 rejected = record.get('ОТКЛОНЕНО', '0')
                 
                 balance_raw = record.get('Баланс', '0')
-                
-                # НОВОЕ: получаем количество выполненных заказов
                 orders_raw = record.get('Выполнено заказов', '0')
                 
                 try:
                     balance_str = str(balance_raw).strip().replace(' ', '').replace(',', '.')
-                    if balance_str and balance_str != '0':
-                        balance = float(balance_str)
-                    else:
-                        balance = 0.0
-                except Exception as e:
+                    balance = float(balance_str) if balance_str and balance_str != '0' else 0.0
+                except:
                     balance = 0.0
                 
-                # НОВОЕ: преобразуем количество заказов
                 try:
                     orders_str = str(orders_raw).strip().replace(' ', '')
-                    if orders_str and orders_str != '0':
-                        orders_completed = int(float(orders_str))
-                    else:
-                        orders_completed = 0
-                except Exception as e:
+                    orders_completed = int(float(orders_str)) if orders_str and orders_str != '0' else 0
+                except:
                     orders_completed = 0
                 
                 if not full_name or not city:
@@ -1349,52 +1337,77 @@ def load_from_google_sheets():
                 recruiter_username = record.get('Username рекрутера', '').replace('@', '').strip()
                 recruiter_id = None
                 
+                # Находим рекрутера по username
                 if recruiter_username:
                     c.execute("SELECT user_id FROM users WHERE username = ?", (recruiter_username,))
                     user = c.fetchone()
                     if user:
                         recruiter_id = user[0]
                 
-                if not recruiter_id and recruiter_username in ["unknownsorcerer", "costa"]:
-                    recruiter_id = ADMIN_ID
+                # Проверяем для всех админов
+                if not recruiter_id:
+                    for admin_id in ADMINS:
+                        if recruiter_username in ['unknownsorcerer', 'costa'] or str(admin_id) in recruiter_username:
+                            recruiter_id = admin_id
+                            break
                 
-                if recruiter_id:
-                    c.execute('''SELECT id, status, balance, orders_completed FROM couriers 
-                                 WHERE full_name = ? AND city = ?''', (full_name, city))
-                    existing = c.fetchone()
+                # ЕСЛИ РЕКРУТЕР НЕ НАЙДЕН - ПРОПУСКАЕМ
+                if not recruiter_id:
+                    logger.warning(f"⚠️ Рекрутер не найден для курьера {full_name}, строка пропущена")
+                    continue
+                
+                # ПРОВЕРЯЕМ, ЧТО РЕКРУТЕР СУЩЕСТВУЕТ В ТАБЛИЦЕ users
+                c.execute("SELECT user_id FROM users WHERE user_id = ?", (recruiter_id,))
+                if not c.fetchone():
+                    # Если рекрутера нет в БД, создаем его
+                    logger.info(f"👤 Создаем пользователя-рекрутера с ID {recruiter_id}")
+                    registration_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    c.execute("""
+                        INSERT INTO users 
+                        (user_id, username, first_name, last_name, registration_date, balance, test_passed) 
+                        VALUES (?, ?, ?, ?, ?, 0, 0)
+                    """, (recruiter_id, recruiter_username or f"user_{recruiter_id}", "Рекрутер", "", registration_date))
+                    conn.commit()
+                
+                # Ищем курьера в БД
+                c.execute('''SELECT id, status, balance, orders_completed FROM couriers 
+                             WHERE full_name = ? AND city = ?''', (full_name, city))
+                existing = c.fetchone()
+                
+                if existing:
+                    existing_id, existing_status, existing_balance, existing_orders = existing
                     
-                    if existing:
-                        existing_id, existing_status, existing_balance, existing_orders = existing
-                        
+                    c.execute('''
+                        UPDATE couriers 
+                        SET status = ?, balance = ?, sheet_row = ?, recruiter_id = ?, orders_completed = ?
+                        WHERE id = ?
+                    ''', (status, balance, i + 2, recruiter_id, orders_completed, existing_id))
+                    updated_count += 1
+                    
+                    if status == 'confirmed' and existing_status != 'confirmed':
                         c.execute('''
                             UPDATE couriers 
-                            SET status = ?, balance = ?, sheet_row = ?, recruiter_id = ?, orders_completed = ?
+                            SET confirmed_at = ? 
                             WHERE id = ?
-                        ''', (status, balance, i + 2, recruiter_id, orders_completed, existing_id))
-                        updated_count += 1
-                        
-                        if status == 'confirmed' and existing_status != 'confirmed':
-                            c.execute('''
-                                UPDATE couriers 
-                                SET confirmed_at = ? 
-                                WHERE id = ?
-                            ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), existing_id))
-                        
-                        if existing_orders != orders_completed:
-                            logger.info(f"📊 Обновлены заказы {full_name}: {existing_orders} -> {orders_completed}")
-                    else:
-                        registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        confirmed_at = registered_at if status == 'confirmed' else None
-                        
-                        c.execute('''
-                            INSERT INTO couriers 
-                            (recruiter_id, full_name, city, status, balance, registered_at, confirmed_at, sheet_row, orders_completed) 
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ''', (recruiter_id, full_name, city, status, balance, registered_at, confirmed_at, i + 2, orders_completed))
-                        new_count += 1
+                        ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), existing_id))
+                    
+                    if existing_orders != orders_completed:
+                        logger.info(f"📊 Обновлены заказы {full_name}: {existing_orders} -> {orders_completed}")
+                else:
+                    registered_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    confirmed_at = registered_at if status == 'confirmed' else None
+                    
+                    c.execute('''
+                        INSERT INTO couriers 
+                        (recruiter_id, full_name, city, status, balance, registered_at, confirmed_at, sheet_row, orders_completed) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (recruiter_id, full_name, city, status, balance, registered_at, confirmed_at, i + 2, orders_completed))
+                    new_count += 1
+                    logger.info(f"✅ Добавлен новый курьер: {full_name}")
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка при обработке строки {i+2}: {e}")
+                logger.error(traceback.format_exc())
                 continue
         
         conn.commit()
@@ -2446,7 +2459,6 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ========== ЛИЧНЫЙ КАБИНЕТ ==========
 async def personal_account_menu(query, user_id, context):
     keyboard = [
-        [InlineKeyboardButton("🔑 Войти в кабинет", url=PERSONAL_ACCOUNT_URL)],
         [InlineKeyboardButton("👥 Список моих курьеров", callback_data='my_couriers')],
         [InlineKeyboardButton("📝 Записать курьера", callback_data='add_courier')],
         [InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]
@@ -3790,6 +3802,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
