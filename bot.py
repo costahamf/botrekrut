@@ -2342,14 +2342,14 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
         message_text
     )
     
-    # Отправляем подтверждение пользователю БЕЗ Markdown разметки
+    # Отправляем подтверждение пользователю БЕЗ Markdown
     await send_and_track(
         update, context,
         f"✅ Ваше обращение принято!\n\n"
         f"🆔 Номер обращения: {ticket_id}\n"
         f"⏱ Ожидаемое время ответа: от 15 минут до 1 часа\n\n"
         f"Как только администратор ответит, вы получите уведомление."
-        # Убрали parse_mode='Markdown'
+        # parse_mode не указываем
     )
     
     keyboard = [
@@ -2357,18 +2357,26 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
         [InlineKeyboardButton("✅ Закрыть", callback_data=f'admin_close_{ticket_id}')]
     ]
     
-    # Экранируем спецсимволы в сообщении пользователя для Markdown
-    escaped_message = message_text.replace('_', '\\_').replace('*', '\\*').replace('`', '\\`').replace('[', '\\[')
+    # ЭКРАНИРУЕМ ВСЕ СПЕЦСИМВОЛЫ В СООБЩЕНИИ ПОЛЬЗОВАТЕЛЯ
+    # Markdown спецсимволы: _ * [ ] ( ) ~ ` > # + - = | { } . !
+    import re
+    special_chars = r'[_*[\]()~`>#+\-=|{}.!]'
+    escaped_message = re.sub(special_chars, r'\\\g<0>', message_text)
+    
+    # Также экранируем username если есть
+    username_display = f"@{user.username}" if user.username else "нет username"
+    escaped_username = re.sub(special_chars, r'\\\g<0>', username_display)
     
     admin_message = (
         f"🆘 *НОВОЕ ОБРАЩЕНИЕ В ПОДДЕРЖКУ*\n\n"
         f"🆔 *Тикет:* `{ticket_id}`\n"
-        f"👤 *Пользователь:* {user.first_name} (@{user.username})\n"
+        f"👤 *Пользователь:* {user.first_name} ({escaped_username})\n"
         f"🆔 *User ID:* `{user.id}`\n"
         f"📅 *Время:* {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
         f"📝 *Сообщение:*\n{escaped_message}"
     )
     
+    # Отправляем админу с Markdown
     await context.bot.send_message(
         chat_id=ADMIN_ID,
         text=admin_message,
@@ -3802,6 +3810,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
