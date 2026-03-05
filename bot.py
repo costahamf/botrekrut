@@ -913,6 +913,56 @@ def update_courier_status_in_sheet(sheet_row, status_text):
         logger.error(f"❌ Ошибка обновления статуса в Google Sheets: {e}")
         return False
 
+def sync_deleted_couriers():
+    """Удаляет из БД курьеров, которых нет в Google Sheets"""
+    try:
+        sheet = get_google_sheet()
+        if not sheet:
+            logger.warning("⚠️ Не удалось подключиться к Google Sheets")
+            return
+        
+        # Получаем всех курьеров из таблицы
+        records = sheet.get_all_records()
+        
+        # Создаем множество кортежей (ФИО, Город) из таблицы
+        sheet_couriers = set()
+        for record in records:
+            full_name = record.get('ФИО клиента', '').strip()
+            city = record.get('Город', '').strip()
+            if full_name and city:
+                sheet_couriers.add((full_name, city))
+        
+        logger.info(f"📊 В Google Sheets найдено {len(sheet_couriers)} курьеров")
+        
+        # Получаем всех курьеров из БД
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT id, full_name, city FROM couriers")
+        db_couriers = c.fetchall()
+        
+        deleted_count = 0
+        for courier in db_couriers:
+            courier_id, full_name, city = courier
+            if (full_name, city) not in sheet_couriers:
+                # Этого курьера нет в таблице - удаляем из БД
+                c.execute("DELETE FROM couriers WHERE id = ?", (courier_id,))
+                deleted_count += 1
+                logger.info(f"🗑️ Удален курьер из БД: {full_name} ({city})")
+        
+        if deleted_count > 0:
+            conn.commit()
+            logger.info(f"✅ Удалено {deleted_count} курьеров из БД")
+            
+            # Пересчитываем балансы после удаления
+            recalc_all_balances()
+        else:
+            logger.info("✅ Нет курьеров для удаления")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при синхронизации удалений: {e}")
+        logger.error(traceback.format_exc())
+
+# Модифицируем существующую функцию check_pending_couriers
 def check_pending_couriers():
     """Проверяет статусы курьеров в Google Sheets и синхронизирует с БД"""
     try:
@@ -932,19 +982,26 @@ def check_pending_couriers():
         balance_updated_count = 0
         orders_updated_count = 0
         
+        # Множество для отслеживания существующих курьеров
+        existing_couriers = set()
+        
         for i, record in enumerate(records):
             try:
                 full_name = record.get('ФИО клиента', '').strip()
                 city = record.get('Город', '').strip()
                 status_text = record.get('СТАТУС', '').strip()
                 
+                if not full_name or not city:
+                    continue
+                
+                # Добавляем в множество существующих
+                existing_couriers.add((full_name, city))
+                
                 recruiter_username = record.get('Username рекрутера', '').replace('@', '').strip()
                 
                 balance_raw = record.get('Баланс', '0')
                 accepted_raw = record.get('ПРИНЯТО', '0')
                 rejected_raw = record.get('ОТКЛОНЕНО', '0')
-                
-                # НОВОЕ: получаем количество выполненных заказов
                 orders_raw = record.get('Выполнено заказов', '0')
                 
                 accepted = str(accepted_raw).strip()
@@ -952,30 +1009,19 @@ def check_pending_couriers():
                 
                 try:
                     balance_str = str(balance_raw).strip().replace(' ', '').replace(',', '.')
-                    if balance_str and balance_str != '0' and balance_str != '':
-                        balance = float(balance_str)
-                    else:
-                        balance = 0.0
-                except Exception as e:
+                    balance = float(balance_str) if balance_str and balance_str != '0' else 0.0
+                except:
                     balance = 0.0
                 
-                # НОВОЕ: преобразуем количество заказов в число
                 try:
                     orders_str = str(orders_raw).strip().replace(' ', '')
-                    if orders_str and orders_str != '0' and orders_str != '':
-                        orders_completed = int(float(orders_str))  # на случай если там число с плавающей точкой
-                    else:
-                        orders_completed = 0
-                except Exception as e:
+                    orders_completed = int(float(orders_str)) if orders_str and orders_str != '0' else 0
+                except:
                     orders_completed = 0
                 
                 sheet_row = i + 2
                 
-                if not full_name or not city:
-                    continue
-                
                 new_status = None
-                
                 if accepted in ['1', 'true', 'True', 'TRUE', 'yes', 'Yes', 'YES', '✅', '☑']:
                     new_status = 'confirmed'
                 elif rejected in ['1', 'true', 'True', 'TRUE', 'yes', 'Yes', 'YES', '❌']:
@@ -1019,7 +1065,6 @@ def check_pending_couriers():
                                    datetime.now().strftime("%Y-%m-%d %H:%M:%S") if new_status == 'confirmed' else None,
                                    existing_id))
                         updated_count += 1
-                        logger.info(f"🔄 Обновлен статус в БД: {full_name}: {existing_status} -> {new_status}")
                         
                         status_text_map = {
                             'confirmed': "✅ Подтвержден",
@@ -1032,13 +1077,10 @@ def check_pending_couriers():
                     if existing_balance != balance:
                         c.execute("UPDATE couriers SET balance = ? WHERE id = ?", (balance, existing_id))
                         balance_updated_count += 1
-                        logger.info(f"💰 Обновлен баланс курьера {full_name}: {existing_balance} -> {balance}")
                     
-                    # НОВОЕ: обновляем количество выполненных заказов
                     if existing_orders != orders_completed:
                         c.execute("UPDATE couriers SET orders_completed = ? WHERE id = ?", (orders_completed, existing_id))
                         orders_updated_count += 1
-                        logger.info(f"📊 Обновлены заказы курьера {full_name}: {existing_orders} -> {orders_completed}")
                     
                     if existing_sheet_row != sheet_row:
                         c.execute("UPDATE couriers SET sheet_row = ? WHERE id = ?", (sheet_row, existing_id))
@@ -1052,15 +1094,26 @@ def check_pending_couriers():
                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                               (recruiter_id, full_name, city, new_status, balance, registered_at, confirmed_at, sheet_row, orders_completed))
                     new_count += 1
-                    logger.info(f"✅ Добавлен новый курьер в БД: {full_name} (заказов: {orders_completed})")
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка при обработке строки {i+2}: {e}")
                 continue
         
+        # УДАЛЯЕМ курьеров, которых нет в таблице
+        c.execute("SELECT id, full_name, city FROM couriers WHERE recruiter_id = ?", (ADMIN_ID,))
+        db_couriers = c.fetchall()
+        
+        deleted_count = 0
+        for courier in db_couriers:
+            courier_id, full_name, city = courier
+            if (full_name, city) not in existing_couriers:
+                c.execute("DELETE FROM couriers WHERE id = ?", (courier_id,))
+                deleted_count += 1
+                logger.info(f"🗑️ Удален курьер из БД: {full_name} ({city})")
+        
         conn.commit()
         
-        # Пересчитываем балансы всех пользователей
+        # Пересчитываем балансы
         logger.info("🔄 Пересчитываем балансы всех пользователей...")
         recalc_all_balances()
         
@@ -1069,6 +1122,7 @@ def check_pending_couriers():
         logger.info(f"   • Добавлено новых: {new_count}")
         logger.info(f"   • Обновлено балансов: {balance_updated_count}")
         logger.info(f"   • Обновлено заказов: {orders_updated_count}")
+        logger.info(f"   • Удалено из БД: {deleted_count}")
         
     except Exception as e:
         logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
@@ -3537,6 +3591,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
