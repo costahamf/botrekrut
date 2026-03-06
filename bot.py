@@ -3870,7 +3870,6 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========== ЗАПУСК ==========
-# ========== ЗАПУСК ==========
 def main():
     # Инициализируем БД
     init_database()
@@ -3909,7 +3908,8 @@ def main():
     # ========== НАСТРОЙКА ВЕБХУКА ДЛЯ BOTHOST.RU ==========
     import os
     PORT = int(os.environ.get('PORT', 8080))  # Порт из переменных окружения или 8080
-    WEBHOOK_URL = "http://agent.bothost.ru/api/webhooks/github"  # URL из твоего скриншота
+    # ВАЖНО: используем URL агента, а не URL для автообновления
+    WEBHOOK_URL = "http://nsk4.bothost.ru/api/bots/update"  # ИСПРАВЛЕНО!
     
     logger.info(f"🚀 Запускаем бот в режиме вебхука на порту {PORT}")
     logger.info(f"📡 URL вебхука: {WEBHOOK_URL}")
@@ -3923,7 +3923,6 @@ def main():
         allowed_updates=Update.ALL_TYPES
     )
     # ========== КОНЕЦ НАСТРОЙКИ ВЕБХУКА ==========
-
 
 
 
