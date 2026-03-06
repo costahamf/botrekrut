@@ -3870,6 +3870,7 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========== ЗАПУСК ==========
+# ========== ЗАПУСК ==========
 def main():
     # Инициализируем БД
     init_database()
@@ -3905,11 +3906,24 @@ def main():
     # Добавляем обработчик сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    logger.info("✅ Бот запускается...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # ========== НАСТРОЙКА ВЕБХУКА ДЛЯ BOTHOST.RU ==========
+    import os
+    PORT = int(os.environ.get('PORT', 8080))  # Порт из переменных окружения или 8080
+    WEBHOOK_URL = "http://agent.bothost.ru/api/webhooks/github"  # URL из твоего скриншота
+    
+    logger.info(f"🚀 Запускаем бот в режиме вебхука на порту {PORT}")
+    logger.info(f"📡 URL вебхука: {WEBHOOK_URL}")
+    
+    # Запускаем вебхук
+    application.run_webhook(
+        listen="0.0.0.0",  # Слушаем все интерфейсы
+        port=PORT,
+        webhook_url=WEBHOOK_URL,
+        secret_token=TOKEN,  # Используем токен как секрет
+        allowed_updates=Update.ALL_TYPES
+    )
+    # ========== КОНЕЦ НАСТРОЙКИ ВЕБХУКА ==========
 
-if __name__ == '__main__':
-    main()
 
 
 
