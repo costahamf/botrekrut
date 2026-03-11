@@ -3870,11 +3870,12 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========== ЗАПУСК ==========
+# ========== ЗАПУСК ==========
 def main():
-    # Инициализируем БД
+    # Сначала создаем таблицы
     init_database()
     
-    # Загружаем бэкап если есть
+    # Потом загружаем бэкап (теперь таблицы уже есть)
     load_backup()
     
     # Запускаем автосохранение и мониторинг
@@ -3907,22 +3908,22 @@ def main():
     
     # ========== НАСТРОЙКА ВЕБХУКА ДЛЯ BOTHOST.RU ==========
     import os
-    PORT = int(os.environ.get('PORT', 8080))  # Порт из переменных окружения или 8080
-    # ВАЖНО: используем URL агента, а не URL для автообновления
-    WEBHOOK_URL = "http://nsk4.bothost.ru/api/bots/update"  # ИСПРАВЛЕНО!
+    PORT = int(os.environ.get('PORT', 8080))
+    WEBHOOK_URL = "http://nsk4.bothost.ru/api/bots/update"
     
     logger.info(f"🚀 Запускаем бот в режиме вебхука на порту {PORT}")
     logger.info(f"📡 URL вебхука: {WEBHOOK_URL}")
     
     # Запускаем вебхук
     application.run_webhook(
-        listen="0.0.0.0",  # Слушаем все интерфейсы
+        listen="0.0.0.0",
         port=PORT,
         webhook_url=WEBHOOK_URL,
-        secret_token=TOKEN,  # Используем токен как секрет
+        secret_token=TOKEN,
         allowed_updates=Update.ALL_TYPES
     )
     # ========== КОНЕЦ НАСТРОЙКИ ВЕБХУКА ==========
+
 
 
 
