@@ -3939,7 +3939,6 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========== ЗАПУСК ==========
-# ========== ЗАПУСК ==========
 def main():
     # Инициализируем БД
     init_database()
@@ -3981,5 +3980,5 @@ def main():
     # ========== ЗАПУСК В РЕЖИМЕ POLLING ==========
     logger.info("🚀 Запускаем бот в режиме polling")
     
-    # Запускаем polling
+    # Запускаем polling (без всяких вебхуков)
     application.run_polling()
