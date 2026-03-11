@@ -1495,9 +1495,14 @@ def load_backup():
 def start_auto_backup():
     """Запускает автосохранение каждые 5 минут"""
     def backup_worker():
+        time.sleep(10)  # ДАЙ БД ВРЕМЯ ИНИЦИАЛИЗИРОВАТЬСЯ
         while True:
-            time.sleep(300)
-            backup_database()
+            try:
+                backup_database()
+                time.sleep(300)
+            except Exception as e:
+                logger.error(f"Ошибка в автосохранении: {e}")
+                time.sleep(300)
     
     thread = threading.Thread(target=backup_worker, daemon=True)
     thread.start()
@@ -3871,19 +3876,26 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== ЗАПУСК ==========
 # ========== ЗАПУСК ==========
 # ========== ЗАПУСК ==========
+# ========== ЗАПУСК ==========
 def main():
-    # Сначала создаем таблицы
+    # 1. Сначала создаем таблицы (САМОЕ ГЛАВНОЕ!)
     init_database()
+    logger.info("✅ Таблицы БД созданы")
     
-    # Потом загружаем бэкап
+    # 2. Потом загружаем бэкап (теперь таблицы есть)
     load_backup()
+    logger.info("✅ Бэкап загружен")
     
-    # ТЕПЕРЬ регистрируем сохранение при выходе (после создания таблиц)
+    # 3. ТЕПЕРЬ регистрируем сохранение при выходе
     atexit.register(backup_database)
+    logger.info("✅ Регистрация atexit выполнена")
     
-    # Запускаем автосохранение и мониторинг
+    # 4. И только потом запускаем фоновые процессы
+    # НО! Нужно убедиться, что таблицы существуют перед запуском потока
+    time.sleep(1)  # Небольшая пауза для гарантии
     start_auto_backup()
     start_sheet_monitoring()
+    logger.info("✅ Фоновые процессы запущены")
     
     # Создаем приложение
     application = Application.builder().token(TOKEN).build()
@@ -3925,6 +3937,7 @@ def main():
         secret_token=TOKEN,
         allowed_updates=Update.ALL_TYPES
     )
+
 
 
 
