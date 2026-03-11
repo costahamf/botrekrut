@@ -1518,7 +1518,6 @@ def start_sheet_monitoring():
     thread.start()
     logger.info("✅ Мониторинг Google Sheets запущен (интервал 5 минут)")
 
-atexit.register(backup_database)
 
 # ========== ТЕСТОВЫЕ ВОПРОСЫ ==========
 TEST_QUESTIONS = [
@@ -3871,12 +3870,16 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== ЗАПУСК ==========
 # ========== ЗАПУСК ==========
+# ========== ЗАПУСК ==========
 def main():
     # Сначала создаем таблицы
     init_database()
     
-    # Потом загружаем бэкап (теперь таблицы уже есть)
+    # Потом загружаем бэкап
     load_backup()
+    
+    # ТЕПЕРЬ регистрируем сохранение при выходе (после создания таблиц)
+    atexit.register(backup_database)
     
     # Запускаем автосохранение и мониторинг
     start_auto_backup()
@@ -3922,7 +3925,6 @@ def main():
         secret_token=TOKEN,
         allowed_updates=Update.ALL_TYPES
     )
-    # ========== КОНЕЦ НАСТРОЙКИ ВЕБХУКА ==========
 
 
 
