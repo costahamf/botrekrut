@@ -3939,6 +3939,7 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========== ЗАПУСК ==========
+# ========== ЗАПУСК ==========
 def main():
     # Инициализируем БД
     init_database()
@@ -3950,7 +3951,7 @@ def main():
     start_auto_backup()
     start_sheet_monitoring()
     
-    # Регистрируем сохранение при выходе (ТОЛЬКО ПОСЛЕ инициализации!)
+    # Регистрируем сохранение при выходе
     atexit.register(backup_database)
     
     # Создаем приложение
@@ -3977,22 +3978,8 @@ def main():
     # Добавляем обработчик сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # ========== НАСТРОЙКА ВЕБХУКА ДЛЯ BOTHOST.RU ==========
-    import os
-    PORT = int(os.environ.get('PORT', 8080))
-    WEBHOOK_URL = "http://nsk4.bothost.ru/api/bots/update"
+    # ========== ЗАПУСК В РЕЖИМЕ POLLING ==========
+    logger.info("🚀 Запускаем бот в режиме polling")
     
-    logger.info(f"🚀 Запускаем бот в режиме вебхука на порту {PORT}")
-    logger.info(f"📡 URL вебхука: {WEBHOOK_URL}")
-    
-    # Запускаем вебхук
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=WEBHOOK_URL,
-        secret_token=TOKEN,
-        allowed_updates=Update.ALL_TYPES
-    )
-
-if __name__ == '__main__':
-    main()
+    # Запускаем polling
+    application.run_polling()
