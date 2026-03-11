@@ -2560,17 +2560,17 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     context.user_data['replying_to_ticket'] = None
 # ========== ЛИЧНЫЙ КАБИНЕТ ==========
-async def personal_account_menu(query, user_id, context):
+aasync def personal_account_menu(query, user_id, context):
     text = (
         "👤 *Личный кабинет*\n\n"
-        "Выберите действие или используйте ссылку для курьера:\n\n"
-        "🔗 *Ссылка для курьера:*\n"
-        "https://reg.eda.yandex.ru/?advertisement_campaign=forms_for_agents&user_invite_code=f570ca2872604481884bbe72291d8ec5&utm_content=blank\n"
+        "Выберите действие:\n\n"
+        "📌 После приглашения курьера, не забудьте добавить его в свой список!"
     )
     
     keyboard = [
         [InlineKeyboardButton("👥 Список моих курьеров", callback_data='my_couriers')],
         [InlineKeyboardButton("📝 Записать курьера", callback_data='add_courier')],
+        [InlineKeyboardButton("👀 Посмотреть лидов", url='https://partners-app.yandex.ru/team_ref/92cc13ee5ebf4e39beaf9e63107415a7?locale=ru')],
         [InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]
     ]
     
@@ -3923,6 +3923,7 @@ def main():
         allowed_updates=Update.ALL_TYPES
     )
     # ========== КОНЕЦ НАСТРОЙКИ ВЕБХУКА ==========
+
 
 
 
