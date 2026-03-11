@@ -15,8 +15,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 import time
 import asyncio
 
-DB_INITIALIZED = False
-
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -66,118 +64,99 @@ def get_db():
 
 def init_database():
     """Инициализирует таблицы в БД"""
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Таблица пользователей
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (user_id INTEGER PRIMARY KEY,
+                  username TEXT,
+                  first_name TEXT,
+                  last_name TEXT,
+                  registration_date TEXT,
+                  balance REAL DEFAULT 0,
+                  test_passed INTEGER DEFAULT 0,
+                  test_attempts INTEGER DEFAULT 0,
+                  last_test_attempt TEXT)''')
+    
+    # Таблица заявок на вывод
+    c.execute('''CREATE TABLE IF NOT EXISTS withdrawals
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id INTEGER,
+                  amount REAL,
+                  payment_method TEXT,
+                  payment_details TEXT,
+                  status TEXT DEFAULT 'pending',
+                  request_date TEXT,
+                  completed_date TEXT,
+                  reject_reason TEXT,
+                  FOREIGN KEY (user_id) REFERENCES users(user_id))''')
+    
+    # Таблица тикетов поддержки
+    c.execute('''CREATE TABLE IF NOT EXISTS support_tickets
+                 (ticket_id TEXT PRIMARY KEY,
+                  user_id INTEGER,
+                  username TEXT,
+                  first_name TEXT,
+                  message TEXT,
+                  status TEXT DEFAULT 'open',
+                  created_at TEXT,
+                  answered_at TEXT,
+                  admin_reply TEXT,
+                  FOREIGN KEY (user_id) REFERENCES users(user_id))''')
+    
+    # Таблица курьеров с новыми полями
+    c.execute('''CREATE TABLE IF NOT EXISTS couriers
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  recruiter_id INTEGER,
+                  full_name TEXT,
+                  city TEXT,
+                  status TEXT DEFAULT 'pending',
+                  balance REAL DEFAULT 0,
+                  registered_at TEXT,
+                  confirmed_at TEXT,
+                  sheet_row INTEGER,
+                  orders_completed INTEGER DEFAULT 0,
+                  reject_reason TEXT,
+                  invited_at TEXT,
+                  FOREIGN KEY (recruiter_id) REFERENCES users(user_id))''')
+    
+    # Проверяем и добавляем новые поля, если их нет
     try:
-        conn = get_db()
-        c = conn.cursor()
-        
-        # Сначала включаем поддержку внешних ключей
-        c.execute("PRAGMA foreign_keys = ON")
-        
-        # Таблица пользователей (должна быть первой, так как на неё ссылаются другие)
-        c.execute('''CREATE TABLE IF NOT EXISTS users
-                     (user_id INTEGER PRIMARY KEY,
-                      username TEXT,
-                      first_name TEXT,
-                      last_name TEXT,
-                      registration_date TEXT,
-                      balance REAL DEFAULT 0,
-                      test_passed INTEGER DEFAULT 0,
-                      test_attempts INTEGER DEFAULT 0,
-                      last_test_attempt TEXT)''')
-        
-        # Таблица заявок на вывод
-        c.execute('''CREATE TABLE IF NOT EXISTS withdrawals
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      user_id INTEGER,
-                      amount REAL,
-                      payment_method TEXT,
-                      payment_details TEXT,
-                      status TEXT DEFAULT 'pending',
-                      request_date TEXT,
-                      completed_date TEXT,
-                      reject_reason TEXT,
-                      FOREIGN KEY (user_id) REFERENCES users(user_id))''')
-        
-        # Таблица тикетов поддержки
-        c.execute('''CREATE TABLE IF NOT EXISTS support_tickets
-                     (ticket_id TEXT PRIMARY KEY,
-                      user_id INTEGER,
-                      username TEXT,
-                      first_name TEXT,
-                      message TEXT,
-                      status TEXT DEFAULT 'open',
-                      created_at TEXT,
-                      answered_at TEXT,
-                      admin_reply TEXT,
-                      FOREIGN KEY (user_id) REFERENCES users(user_id))''')
-        
-        # Таблица курьеров
-        c.execute('''CREATE TABLE IF NOT EXISTS couriers
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      recruiter_id INTEGER,
-                      full_name TEXT,
-                      city TEXT,
-                      status TEXT DEFAULT 'pending',
-                      balance REAL DEFAULT 0,
-                      registered_at TEXT,
-                      confirmed_at TEXT,
-                      sheet_row INTEGER,
-                      orders_completed INTEGER DEFAULT 0,
-                      reject_reason TEXT,
-                      invited_at TEXT,
-                      FOREIGN KEY (recruiter_id) REFERENCES users(user_id))''')
-        
-        # Сохраняем изменения
-        conn.commit()
-        
-        # Проверяем и добавляем новые поля в таблицу couriers
-        # Для этого нужен отдельный commit после ALTER TABLE
-        try:
-            c.execute("SELECT orders_completed FROM couriers LIMIT 1")
-        except sqlite3.OperationalError:
-            c.execute("ALTER TABLE couriers ADD COLUMN orders_completed INTEGER DEFAULT 0")
-            conn.commit()
-            logger.info("✅ Добавлено поле orders_completed в таблицу couriers")
-        
-        try:
-            c.execute("SELECT reject_reason FROM couriers LIMIT 1")
-        except sqlite3.OperationalError:
-            c.execute("ALTER TABLE couriers ADD COLUMN reject_reason TEXT")
-            conn.commit()
-            logger.info("✅ Добавлено поле reject_reason в таблицу couriers")
-        
-        try:
-            c.execute("SELECT invited_at FROM couriers LIMIT 1")
-        except sqlite3.OperationalError:
-            c.execute("ALTER TABLE couriers ADD COLUMN invited_at TEXT")
-            conn.commit()
-            logger.info("✅ Добавлено поле invited_at в таблицу couriers")
-        
-        logger.info("✅ Таблицы созданы/проверены")
-        
-        # Загружаем данные из Google Sheets при старте
-        try:
-            load_from_google_sheets()
-        except Exception as e:
-            logger.error(f"❌ Ошибка загрузки из Google Sheets при старте: {e}")
-        
-        # Пересчитываем балансы
-        try:
-            logger.info("🔄 Пересчитываем балансы после загрузки...")
-            recalc_all_balances()
-        except Exception as e:
-            logger.error(f"❌ Ошибка при пересчете балансов: {e}")
-        
-        global DB_INITIALIZED
-        DB_INITIALIZED = True
-        logger.info("✅ База данных инициализирована")
-        return True
-        
+        c.execute("SELECT orders_completed FROM couriers LIMIT 1")
+    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE couriers ADD COLUMN orders_completed INTEGER DEFAULT 0")
+        logger.info("✅ Добавлено поле orders_completed в таблицу couriers")
+    
+    try:
+        c.execute("SELECT reject_reason FROM couriers LIMIT 1")
+    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE couriers ADD COLUMN reject_reason TEXT")
+        logger.info("✅ Добавлено поле reject_reason в таблицу couriers")
+    
+    try:
+        c.execute("SELECT invited_at FROM couriers LIMIT 1")
+    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE couriers ADD COLUMN invited_at TEXT")
+        logger.info("✅ Добавлено поле invited_at в таблицу couriers")
+    
+    conn.commit()
+    logger.info("✅ Таблицы созданы/проверены")
+    
+    # Загружаем данные из Google Sheets при старте
+    try:
+        load_from_google_sheets()
     except Exception as e:
-        logger.error(f"❌ Критическая ошибка при инициализации БД: {e}")
-        logger.error(traceback.format_exc())
-        return False
-
+        logger.error(f"❌ Ошибка загрузки из Google Sheets при старте: {e}")
+    
+    # Пересчитываем балансы
+    try:
+        logger.info("🔄 Пересчитываем балансы после загрузки...")
+        recalc_all_balances()
+    except Exception as e:
+        logger.error(f"❌ Ошибка при пересчете балансов: {e}")
+    
+    logger.info("✅ База данных инициализирована")
 # ========== ФУНКЦИИ ДЛЯ ПЕРЕСЧЕТА БАЛАНСОВ ==========
 def recalc_all_balances():
     """Пересчитывает балансы всех пользователей"""
@@ -568,7 +547,6 @@ def get_ticket(ticket_id):
     except Exception as e:
         logger.error(f"Ошибка в get_ticket: {e}")
         return None
-
 def is_ticket_open(ticket_id):
     """Проверяет, открыт ли тикет"""
     try:
@@ -961,7 +939,6 @@ def add_courier_to_google_sheet(recruiter_name, recruiter_username, full_name, c
     except Exception as e:
         logger.error(f"Ошибка добавления в Google Sheets: {e}")
         return None, None
-
 def notify_recruiter_about_status_change(recruiter_id, full_name, city, new_status, reject_reason=""):
     """Отправляет уведомление рекрутеру об изменении статуса курьера"""
     try:
@@ -1023,7 +1000,6 @@ def notify_recruiter_about_status_change(recruiter_id, full_name, city, new_stat
         
     except Exception as e:
         logger.error(f"❌ Ошибка в notify_recruiter_about_status_change: {e}")
-
 def update_courier_status_in_sheet(sheet_row, status_text):
     """Обновляет статус в Google Sheets"""
     try:
@@ -1318,7 +1294,6 @@ def check_pending_couriers():
     except Exception as e:
         logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
         logger.error(traceback.format_exc())
-
 def load_from_google_sheets():
     """Загружает курьеров из Google Sheets в БД при старте"""
     try:
@@ -1456,60 +1431,23 @@ def load_from_google_sheets():
 
 def backup_database():
     """Сохраняет все данные в JSON файл"""
-    global DB_INITIALIZED
-    if not DB_INITIALIZED:
-        logger.debug("⏳ БД еще не инициализирована, пропускаем бэкап")
-        return False
-    
     try:
         conn = get_db()
         c = conn.cursor()
         
-        # Проверяем, существует ли таблица users
-        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
-        if not c.fetchone():
-            logger.debug("⏳ Таблицы еще не созданы, пропускаем бэкап")
-            return False
-        
-        # Получаем данные только если таблицы существуют
-        users = []
-        try:
-            users = [dict(row) for row in c.execute("SELECT * FROM users").fetchall()]
-        except Exception as e:
-            logger.error(f"Ошибка при чтении users: {e}")
-        
-        withdrawals = []
-        try:
-            withdrawals = [dict(row) for row in c.execute("SELECT * FROM withdrawals").fetchall()]
-        except Exception as e:
-            logger.error(f"Ошибка при чтении withdrawals: {e}")
-        
-        support_tickets = []
-        try:
-            support_tickets = [dict(row) for row in c.execute("SELECT * FROM support_tickets").fetchall()]
-        except Exception as e:
-            logger.error(f"Ошибка при чтении support_tickets: {e}")
-        
-        couriers = []
-        try:
-            couriers = [dict(row) for row in c.execute("SELECT * FROM couriers").fetchall()]
-        except Exception as e:
-            logger.error(f"Ошибка при чтении couriers: {e}")
-        
         backup = {
-            'users': users,
-            'withdrawals': withdrawals,
-            'support_tickets': support_tickets,
-            'couriers': couriers,
+            'users': [dict(row) for row in c.execute("SELECT * FROM users").fetchall()],
+            'withdrawals': [dict(row) for row in c.execute("SELECT * FROM withdrawals").fetchall()],
+            'support_tickets': [dict(row) for row in c.execute("SELECT * FROM support_tickets").fetchall()],
+            'couriers': [dict(row) for row in c.execute("SELECT * FROM couriers").fetchall()],
             'timestamp': datetime.now().isoformat()
         }
         
         with open(BACKUP_FILE, 'w', encoding='utf-8') as f:
             json.dump(backup, f, default=str, ensure_ascii=False, indent=2)
         
-        logger.info(f"💾 Автосохранение: {len(users)} users, {len(couriers)} couriers")
+        logger.info(f"💾 Автосохранение: {len(backup['users'])} users, {len(backup['couriers'])} couriers")
         return True
-        
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения бэкапа: {e}")
         return False
@@ -1579,6 +1517,8 @@ def start_sheet_monitoring():
     thread = threading.Thread(target=monitor_worker, daemon=True)
     thread.start()
     logger.info("✅ Мониторинг Google Sheets запущен (интервал 5 минут)")
+
+atexit.register(backup_database)
 
 # ========== ТЕСТОВЫЕ ВОПРОСЫ ==========
 TEST_QUESTIONS = [
@@ -1733,7 +1673,7 @@ async def send_and_track(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
             chat_id=chat_id,
             text=text,
             reply_markup=reply_markup,
-            parse_mode=parse_mode
+            parse_mode=parse_mode  # Теперь parse_mode может быть None
         )
         
         context.user_data['last_bot_message_id'] = message.message_id
@@ -1802,7 +1742,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"📊 Статус теста пользователя {user_id}: {test_passed}")
     
-    # ========== ПОЛНАЯ ОЧИСТКА ЧАТА ==========
+    # ========== НОВЫЙ КОД: ПОЛНАЯ ОЧИСТКА ЧАТА ==========
     try:
         chat_id = update.message.chat_id
         
@@ -1826,9 +1766,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         deleted_count = 0
         async for message in context.bot.get_chat_history(chat_id, limit=100):
             try:
+                # Пропускаем только если это служебное сообщение (но таких в личке нет)
                 await context.bot.delete_message(chat_id, message.message_id)
                 deleted_count += 1
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.1)  # Небольшая задержка чтобы не спамить запросами
             except Exception as e:
                 logger.debug(f"Не удалось удалить сообщение {message.message_id}: {e}")
         
@@ -1836,6 +1777,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         logger.error(f"Ошибка при очистке чата: {e}")
+    # ========== КОНЕЦ НОВОГО КОДА ==========
     
     # Отправляем новое меню
     if test_passed == 1:
@@ -1868,7 +1810,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption=menu_text,
             keyboard=InlineKeyboardMarkup(keyboard)
         )
-
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -2233,7 +2174,7 @@ async def admin_withdrawal_reject_start(update: Update, context: ContextTypes.DE
     query = update.callback_query
     await query.answer()
     
-    if not is_admin(update.effective_user.id):
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         await query.edit_message_text("❌ У вас нет прав администратора")
         return
     
@@ -2244,9 +2185,8 @@ async def admin_withdrawal_reject_start(update: Update, context: ContextTypes.DE
         f"📝 Введите причину отказа для заявки #{request_id}:",
         parse_mode='Markdown'
     )
-
 async def handle_withdrawal_reject_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         return
     
     request_id = context.user_data.get('rejecting_withdrawal')
@@ -2280,7 +2220,7 @@ async def handle_withdrawal_reject_reason(update: Update, context: ContextTypes.
     
     context.user_data['rejecting_withdrawal'] = None
 
-# ========== ЛИЧНОЕ СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЮ ==========
+# ========== НОВАЯ ФУНКЦИЯ: ЛИЧНОЕ СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЮ ==========
 async def admin_message_user_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начинает процесс отправки личного сообщения пользователю"""
     query = update.callback_query
@@ -2331,7 +2271,7 @@ async def admin_message_user_send(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     await query.answer()
     
-    if not is_admin(update.effective_user.id):
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         return
     
     user_id = int(query.data.replace('msg_', ''))
@@ -2346,7 +2286,7 @@ async def admin_message_user_send(update: Update, context: ContextTypes.DEFAULT_
 
 async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отправляет личное сообщение выбранному пользователю"""
-    if not is_admin(update.effective_user.id):
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         return
     
     target_user_id = context.user_data.get('message_target_user')
@@ -2504,7 +2444,6 @@ async def admin_reply_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         f"📝 Введите ответ для тикета `{ticket_id}`:",
         parse_mode='Markdown'
     )
-
 async def admin_close_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -2555,7 +2494,6 @@ async def admin_close_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.edit_message_text(f"❌ Ошибка при закрытии тикета {ticket_id}")
     else:
         await query.edit_message_text("❌ Тикет не найден")
-
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -2621,19 +2559,18 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("❌ Тикет не найден")
     
     context.user_data['replying_to_ticket'] = None
-
 # ========== ЛИЧНЫЙ КАБИНЕТ ==========
 async def personal_account_menu(query, user_id, context):
     text = (
         "👤 *Личный кабинет*\n\n"
-        "Выберите действие:\n\n"
-        "📌 После приглашения курьера, не забудьте добавить его в свой список!"
+        "Выберите действие или используйте ссылку для курьера:\n\n"
+        "🔗 *Ссылка для курьера:*\n"
+        "https://reg.eda.yandex.ru/?advertisement_campaign=forms_for_agents&user_invite_code=f570ca2872604481884bbe72291d8ec5&utm_content=blank\n"
     )
     
     keyboard = [
         [InlineKeyboardButton("👥 Список моих курьеров", callback_data='my_couriers')],
         [InlineKeyboardButton("📝 Записать курьера", callback_data='add_courier')],
-        [InlineKeyboardButton("👀 Посмотреть лидов", url='https://partners-app.yandex.ru/team_ref/92cc13ee5ebf4e39beaf9e63107415a7?locale=ru')],
         [InlineKeyboardButton("🔙 Назад", callback_data='back_to_main')]
     ]
     
@@ -2682,7 +2619,7 @@ async def show_my_couriers(query, user_id, context):
             text += f"{status_emoji} *{full_name}* — {city}\n"
             text += f"   📅 {date_str}{conf_info}\n"
             text += f"   💰 Баланс: {balance} руб.\n"
-            text += f"   📊 *Выполнено заказов: {orders_completed}*\n\n"
+            text += f"   📊 *Выполнено заказов: {orders_completed}*\n\n"  # НОВАЯ СТРОКА
     
     keyboard = [
         [InlineKeyboardButton("📝 Записать курьера", callback_data='add_courier')],
@@ -2704,7 +2641,6 @@ async def show_my_couriers(query, user_id, context):
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
-
 async def add_courier_start(query, user_id, context):
     text = (
         "📝 *Запись курьера*\n\n"
@@ -3106,7 +3042,6 @@ async def finish_test(query, context):
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode='Markdown'
             )
-
 # ========== МЕНЮ ИНФОРМАЦИИ ==========
 async def show_all_info_menu(query, context):
     keyboard = [
@@ -3429,7 +3364,7 @@ async def admin_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка синхронизации: {str(e)}")
-
+        
 async def admin_check_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Проверка файла БД"""
     if not is_admin(update.effective_user.id):
@@ -3476,7 +3411,7 @@ async def admin_check_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_check_couriers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Проверка всех курьеров в БД"""
-    if not is_admin(update.effective_user.id):
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         return
     
     try:
@@ -3515,10 +3450,10 @@ async def admin_check_couriers(update: Update, context: ContextTypes.DEFAULT_TYP
         
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
-
+        
 async def admin_withdrawals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Просмотр всех заявок на вывод"""
-    if not is_admin(update.effective_user.id):
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         await update.message.reply_text("❌ У вас нет прав администратора")
         return
     
@@ -3550,10 +3485,9 @@ async def admin_withdrawals(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(text[i:i+4000], parse_mode='Markdown')
     else:
         await update.message.reply_text(text, parse_mode='Markdown')
-
 async def admin_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Просмотр всех тикетов поддержки"""
-    if not is_admin(update.effective_user.id):
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         await update.message.reply_text("❌ У вас нет прав администратора")
         return
     
@@ -3583,10 +3517,9 @@ async def admin_tickets(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(text[i:i+4000], parse_mode='Markdown')
     else:
         await update.message.reply_text(text, parse_mode='Markdown')
-
 async def admin_fix_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Исправляет баланс конкретного пользователя или всех"""
-    if not is_admin(update.effective_user.id):
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         await update.message.reply_text("❌ У вас нет прав администратора")
         return
     
@@ -3648,7 +3581,7 @@ async def admin_fix_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     else:
-        admin_id = update.effective_user.id
+        admin_id = update.effective_user.id  # Берем ID текущего админа
         c.execute("SELECT SUM(balance) FROM couriers WHERE recruiter_id = ?", (admin_id,))
         couriers_sum = c.fetchone()[0] or 0
         
@@ -3686,10 +3619,9 @@ async def admin_fix_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += "`/fixbalance all` - исправить балансы всех пользователей"
         
         await update.message.reply_text(text, parse_mode='Markdown')
-
 async def admin_user_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает детальный баланс пользователя"""
-    if not is_admin(update.effective_user.id):
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         await update.message.reply_text("❌ У вас нет прав администратора")
         return
     
@@ -3797,7 +3729,7 @@ async def admin_fix_my_couriers(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def admin_fix_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Исправляет фейковых пользователей на реальные данные"""
-    if not is_admin(update.effective_user.id):
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         return
     
     try:
@@ -3827,7 +3759,7 @@ async def admin_fix_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Тестовая команда для проверки Google Sheets"""
-    if not is_admin(update.effective_user.id):
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         await update.message.reply_text("❌ Только для админа")
         return
     
@@ -3882,10 +3814,9 @@ async def test_google(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
     except Exception as e:
         await update.message.reply_text(f"❌ Общая ошибка: {str(e)}")
-
 async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Рассылка сообщений всем пользователям"""
-    if not is_admin(update.effective_user.id):
+    if not is_admin(update.effective_user.id):  # ИСПРАВЛЕНО
         await update.message.reply_text("❌ У вас нет прав администратора")
         return
     
@@ -3950,9 +3881,6 @@ def main():
     start_auto_backup()
     start_sheet_monitoring()
     
-    # Регистрируем сохранение при выходе
-    atexit.register(backup_database)
-    
     # Создаем приложение
     application = Application.builder().token(TOKEN).build()
     
@@ -3977,8 +3905,41 @@ def main():
     # Добавляем обработчик сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # ========== ЗАПУСК В РЕЖИМЕ POLLING ==========
-    logger.info("🚀 Запускаем бот в режиме polling")
+    # ========== НАСТРОЙКА ВЕБХУКА ДЛЯ BOTHOST.RU ==========
+    import os
+    PORT = int(os.environ.get('PORT', 8080))  # Порт из переменных окружения или 8080
+    # ВАЖНО: используем URL агента, а не URL для автообновления
+    WEBHOOK_URL = "http://nsk4.bothost.ru/api/bots/update"  # ИСПРАВЛЕНО!
     
-    # Запускаем polling (без всяких вебхуков)
-    application.run_polling()
+    logger.info(f"🚀 Запускаем бот в режиме вебхука на порту {PORT}")
+    logger.info(f"📡 URL вебхука: {WEBHOOK_URL}")
+    
+    # Запускаем вебхук
+    application.run_webhook(
+        listen="0.0.0.0",  # Слушаем все интерфейсы
+        port=PORT,
+        webhook_url=WEBHOOK_URL,
+        secret_token=TOKEN,  # Используем токен как секрет
+        allowed_updates=Update.ALL_TYPES
+    )
+    # ========== КОНЕЦ НАСТРОЙКИ ВЕБХУКА ==========
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
