@@ -2560,7 +2560,7 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     context.user_data['replying_to_ticket'] = None
 # ========== ЛИЧНЫЙ КАБИНЕТ ==========
-aasync def personal_account_menu(query, user_id, context):
+async def personal_account_menu(query, user_id, context):
     text = (
         "👤 *Личный кабинет*\n\n"
         "Выберите действие:\n\n"
@@ -3923,6 +3923,7 @@ def main():
         allowed_updates=Update.ALL_TYPES
     )
     # ========== КОНЕЦ НАСТРОЙКИ ВЕБХУКА ==========
+
 
 
 
