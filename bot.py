@@ -3908,16 +3908,21 @@ def main():
     # ========== НАСТРОЙКА ВЕБХУКА ==========
     import os
     PORT = int(os.environ.get('PORT', 8080))
-    WEBHOOK_URL = "https://nsk4.bothost.ru/api/bots/update/8685226609:AAEA8vHoWELRP7_KwXfV9Qbpq1usLUfdJ6o"
+    WEBHOOK_URL = "https://nsk4.bothost.ru/api/bots/update"
+    
+    # Секретный токен для авторизации на bothost.ru (придумай свой)
+    SECRET_TOKEN = "my_secret_token_2026_123456789"  # Можешь изменить на любой
     
     logger.info(f"🚀 Запускаем бот в режиме вебхука на порту {PORT}")
     logger.info(f"📡 URL вебхука: {WEBHOOK_URL}")
+    logger.info(f"🔐 Secret token установлен")
     
-    # Запускаем вебхук
+    # Запускаем вебхук с secret_token
     application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         webhook_url=WEBHOOK_URL,
+        secret_token=SECRET_TOKEN,
         allowed_updates=Update.ALL_TYPES
     )
 
@@ -3939,9 +3944,8 @@ if __name__ == '__main__':
 
 
 
-
-
  
+
 
 
 
