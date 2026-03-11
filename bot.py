@@ -3905,21 +3905,21 @@ def main():
     # Добавляем обработчик сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # ========== НАСТРОЙКА ВЕБХУКА ==========
-    import os
-    PORT = int(os.environ.get('PORT', 8080))
-    WEBHOOK_URL = "http://nsk4.bothost.ru/api/bots/update"
-    
-    logger.info(f"🚀 Запускаем бот в режиме вебхука на порту {PORT}")
-    logger.info(f"📡 URL вебхука: {WEBHOOK_URL}")
-    
-    # Запускаем вебхук
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=WEBHOOK_URL,
-        allowed_updates=Update.ALL_TYPES
-    )
+# ========== НАСТРОЙКА ВЕБХУКА ==========
+import os
+PORT = int(os.environ.get('PORT', 8080))
+WEBHOOK_URL = "https://nsk4.bothost.ru/api/bots/update"  # https вместо http
+
+logger.info(f"🚀 Запускаем бот в режиме вебхука на порту {PORT}")
+logger.info(f"📡 URL вебхука: {WEBHOOK_URL}")
+
+# Запускаем вебхук
+application.run_webhook(
+    listen="0.0.0.0",
+    port=PORT,
+    webhook_url=WEBHOOK_URL,
+    allowed_updates=Update.ALL_TYPES
+)
 
 # ЭТО САМОЕ ГЛАВНОЕ - добавляем вызов main()
 if __name__ == '__main__':
@@ -3943,5 +3943,6 @@ if __name__ == '__main__':
 
 
  
+
 
 
