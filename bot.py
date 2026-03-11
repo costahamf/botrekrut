@@ -3908,7 +3908,7 @@ def main():
     # ========== НАСТРОЙКА ВЕБХУКА ==========
     import os
     PORT = int(os.environ.get('PORT', 8080))
-    WEBHOOK_URL = "https://nsk4.bothost.ru/api/bots/update"
+    WEBHOOK_URL = "https://nsk4.bothost.ru/api/bots/update/8685226609:AAEA8vHoWELRP7_KwXfV9Qbpq1usLUfdJ6o"
     
     logger.info(f"🚀 Запускаем бот в режиме вебхука на порту {PORT}")
     logger.info(f"📡 URL вебхука: {WEBHOOK_URL}")
@@ -3942,6 +3942,7 @@ if __name__ == '__main__':
 
 
  
+
 
 
 
