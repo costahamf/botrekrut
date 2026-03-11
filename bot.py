@@ -1518,7 +1518,7 @@ def start_sheet_monitoring():
     thread.start()
     logger.info("✅ Мониторинг Google Sheets запущен (интервал 5 минут)")
 
-atexit.register(backup_database)
+#atexit.register(backup_database)
 
 # ========== ТЕСТОВЫЕ ВОПРОСЫ ==========
 TEST_QUESTIONS = [
@@ -3906,23 +3906,20 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     # ========== НАСТРОЙКА ВЕБХУКА ДЛЯ BOTHOST.RU ==========
-    import os
-    PORT = int(os.environ.get('PORT', 8080))  # Порт из переменных окружения или 8080
-    # ВАЖНО: используем URL агента, а не URL для автообновления
-    WEBHOOK_URL = "http://nsk4.bothost.ru/api/bots/update"  # ИСПРАВЛЕНО!
-    
-    logger.info(f"🚀 Запускаем бот в режиме вебхука на порту {PORT}")
-    logger.info(f"📡 URL вебхука: {WEBHOOK_URL}")
-    
-    # Запускаем вебхук
-    application.run_webhook(
-        listen="0.0.0.0",  # Слушаем все интерфейсы
-        port=PORT,
-        webhook_url=WEBHOOK_URL,
-        secret_token=TOKEN,  # Используем токен как секрет
-        allowed_updates=Update.ALL_TYPES
-    )
-    # ========== КОНЕЦ НАСТРОЙКИ ВЕБХУКА ==========
+import os
+PORT = int(os.environ.get('PORT', 8080))
+WEBHOOK_URL = "http://nsk4.bothost.ru/api/bots/update"
+
+logger.info(f"🚀 Запускаем бот в режиме вебхука на порту {PORT}")
+logger.info(f"📡 URL вебхука: {WEBHOOK_URL}")
+
+# Запускаем вебхук (без secret_token)
+application.run_webhook(
+    listen="0.0.0.0",
+    port=PORT,
+    webhook_url=WEBHOOK_URL,
+    allowed_updates=Update.ALL_TYPES
+)
 
 
 
@@ -3943,3 +3940,4 @@ def main():
 
 
  
+
