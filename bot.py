@@ -1435,6 +1435,12 @@ def backup_database():
         conn = get_db()
         c = conn.cursor()
         
+        # Проверяем, существует ли таблица users
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+        if not c.fetchone():
+            logger.warning("⚠️ Таблица users еще не создана, пропускаем бэкап")
+            return False
+        
         backup = {
             'users': [dict(row) for row in c.execute("SELECT * FROM users").fetchall()],
             'withdrawals': [dict(row) for row in c.execute("SELECT * FROM withdrawals").fetchall()],
@@ -1495,14 +1501,13 @@ def load_backup():
 def start_auto_backup():
     """Запускает автосохранение каждые 5 минут"""
     def backup_worker():
-        time.sleep(10)  # ДАЙ БД ВРЕМЯ ИНИЦИАЛИЗИРОВАТЬСЯ
         while True:
             try:
                 backup_database()
-                time.sleep(300)
+                time.sleep(300)  # 5 минут
             except Exception as e:
                 logger.error(f"Ошибка в автосохранении: {e}")
-                time.sleep(300)
+                time.sleep(60)  # При ошибке ждем минуту и пробуем снова
     
     thread = threading.Thread(target=backup_worker, daemon=True)
     thread.start()
@@ -3874,69 +3879,77 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ========== ЗАПУСК ==========
-# ========== ЗАПУСК ==========
-# ========== ЗАПУСК ==========
-# ========== ЗАПУСК ==========
 def main():
-    # 1. Сначала создаем таблицы (САМОЕ ГЛАВНОЕ!)
-    init_database()
-    logger.info("✅ Таблицы БД созданы")
-    
-    # 2. Потом загружаем бэкап (теперь таблицы есть)
-    load_backup()
-    logger.info("✅ Бэкап загружен")
-    
-    # 3. ТЕПЕРЬ регистрируем сохранение при выходе
-    atexit.register(backup_database)
-    logger.info("✅ Регистрация atexit выполнена")
-    
-    # 4. И только потом запускаем фоновые процессы
-    # НО! Нужно убедиться, что таблицы существуют перед запуском потока
-    time.sleep(1)  # Небольшая пауза для гарантии
-    start_auto_backup()
-    start_sheet_monitoring()
-    logger.info("✅ Фоновые процессы запущены")
-    
-    # Создаем приложение
-    application = Application.builder().token(TOKEN).build()
-    
-    # Добавляем обработчики команд
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("admin", admin_panel))
-    application.add_handler(CommandHandler("sync", admin_sync))
-    application.add_handler(CommandHandler("checkdb", admin_check_db))
-    application.add_handler(CommandHandler("couriers", admin_check_couriers))
-    application.add_handler(CommandHandler("withdrawals", admin_withdrawals))
-    application.add_handler(CommandHandler("tickets", admin_tickets))
-    application.add_handler(CommandHandler("userbalance", admin_user_balance))
-    application.add_handler(CommandHandler("fixbalance", admin_fix_balance))
-    application.add_handler(CommandHandler("fixmy", admin_fix_my_couriers))
-    application.add_handler(CommandHandler("fixusers", admin_fix_users))
-    application.add_handler(CommandHandler("testgoogle", test_google))
-    application.add_handler(CommandHandler("broadcast", admin_broadcast))
-    
-    # Добавляем обработчики callback'ов
-    application.add_handler(CallbackQueryHandler(button_callback))
-    
-    # Добавляем обработчик сообщений
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # ========== НАСТРОЙКА ВЕБХУКА ДЛЯ BOTHOST.RU ==========
-    import os
-    PORT = int(os.environ.get('PORT', 8080))
-    WEBHOOK_URL = "http://nsk4.bothost.ru/api/bots/update"
-    
-    logger.info(f"🚀 Запускаем бот в режиме вебхука на порту {PORT}")
-    logger.info(f"📡 URL вебхука: {WEBHOOK_URL}")
-    
-    # Запускаем вебхук
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=WEBHOOK_URL,
-        secret_token=TOKEN,
-        allowed_updates=Update.ALL_TYPES
-    )
+    try:
+        # Сначала создаем таблицы
+        logger.info("🔄 Инициализация базы данных...")
+        init_database()
+        logger.info("✅ База данных инициализирована")
+        
+        # Потом загружаем бэкап
+        logger.info("🔄 Загрузка бэкапа...")
+        load_backup()
+        logger.info("✅ Бэкап загружен")
+        
+        # Регистрируем сохранение при выходе
+        atexit.register(backup_database)
+        
+        # Запускаем фоновые процессы
+        logger.info("🔄 Запуск фоновых процессов...")
+        start_auto_backup()
+        start_sheet_monitoring()
+        logger.info("✅ Фоновые процессы запущены")
+        
+        # Создаем приложение
+        logger.info("🔄 Создание приложения...")
+        application = Application.builder().token(TOKEN).build()
+        
+        # Добавляем обработчики команд
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("admin", admin_panel))
+        application.add_handler(CommandHandler("sync", admin_sync))
+        application.add_handler(CommandHandler("checkdb", admin_check_db))
+        application.add_handler(CommandHandler("couriers", admin_check_couriers))
+        application.add_handler(CommandHandler("withdrawals", admin_withdrawals))
+        application.add_handler(CommandHandler("tickets", admin_tickets))
+        application.add_handler(CommandHandler("userbalance", admin_user_balance))
+        application.add_handler(CommandHandler("fixbalance", admin_fix_balance))
+        application.add_handler(CommandHandler("fixmy", admin_fix_my_couriers))
+        application.add_handler(CommandHandler("fixusers", admin_fix_users))
+        application.add_handler(CommandHandler("testgoogle", test_google))
+        application.add_handler(CommandHandler("broadcast", admin_broadcast))
+        
+        # Добавляем обработчики callback'ов
+        application.add_handler(CallbackQueryHandler(button_callback))
+        
+        # Добавляем обработчик сообщений
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        
+        logger.info("✅ Бот успешно инициализирован, запускаем...")
+        
+        # ========== НАСТРОЙКА ВЕБХУКА ==========
+        import os
+        PORT = int(os.environ.get('PORT', 8080))
+        WEBHOOK_URL = "http://nsk4.bothost.ru/api/bots/update"
+        
+        logger.info(f"🚀 Запускаем бот в режиме вебхука на порту {PORT}")
+        logger.info(f"📡 URL вебхука: {WEBHOOK_URL}")
+        
+        # Запускаем вебхук
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            webhook_url=WEBHOOK_URL,
+            secret_token=TOKEN,
+            allowed_updates=Update.ALL_TYPES
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА ПРИ ЗАПУСКЕ: {e}")
+        logger.error(traceback.format_exc())
+        # Чтобы бот не падал молча
+        raise e
+
 
 
 
