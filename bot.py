@@ -15,6 +15,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 import time
 import asyncio
 
+DB_INITIALIZED = False
+
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -64,99 +66,115 @@ def get_db():
 
 def init_database():
     """Инициализирует таблицы в БД"""
-    conn = get_db()
-    c = conn.cursor()
-    
-    # Таблица пользователей
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (user_id INTEGER PRIMARY KEY,
-                  username TEXT,
-                  first_name TEXT,
-                  last_name TEXT,
-                  registration_date TEXT,
-                  balance REAL DEFAULT 0,
-                  test_passed INTEGER DEFAULT 0,
-                  test_attempts INTEGER DEFAULT 0,
-                  last_test_attempt TEXT)''')
-    
-    # Таблица заявок на вывод
-    c.execute('''CREATE TABLE IF NOT EXISTS withdrawals
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  user_id INTEGER,
-                  amount REAL,
-                  payment_method TEXT,
-                  payment_details TEXT,
-                  status TEXT DEFAULT 'pending',
-                  request_date TEXT,
-                  completed_date TEXT,
-                  reject_reason TEXT,
-                  FOREIGN KEY (user_id) REFERENCES users(user_id))''')
-    
-    # Таблица тикетов поддержки
-    c.execute('''CREATE TABLE IF NOT EXISTS support_tickets
-                 (ticket_id TEXT PRIMARY KEY,
-                  user_id INTEGER,
-                  username TEXT,
-                  first_name TEXT,
-                  message TEXT,
-                  status TEXT DEFAULT 'open',
-                  created_at TEXT,
-                  answered_at TEXT,
-                  admin_reply TEXT,
-                  FOREIGN KEY (user_id) REFERENCES users(user_id))''')
-    
-    # Таблица курьеров с новыми полями
-    c.execute('''CREATE TABLE IF NOT EXISTS couriers
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  recruiter_id INTEGER,
-                  full_name TEXT,
-                  city TEXT,
-                  status TEXT DEFAULT 'pending',
-                  balance REAL DEFAULT 0,
-                  registered_at TEXT,
-                  confirmed_at TEXT,
-                  sheet_row INTEGER,
-                  orders_completed INTEGER DEFAULT 0,
-                  reject_reason TEXT,
-                  invited_at TEXT,
-                  FOREIGN KEY (recruiter_id) REFERENCES users(user_id))''')
-    
-    # Проверяем и добавляем новые поля, если их нет
     try:
-        c.execute("SELECT orders_completed FROM couriers LIMIT 1")
-    except sqlite3.OperationalError:
-        c.execute("ALTER TABLE couriers ADD COLUMN orders_completed INTEGER DEFAULT 0")
-        logger.info("✅ Добавлено поле orders_completed в таблицу couriers")
-    
-    try:
-        c.execute("SELECT reject_reason FROM couriers LIMIT 1")
-    except sqlite3.OperationalError:
-        c.execute("ALTER TABLE couriers ADD COLUMN reject_reason TEXT")
-        logger.info("✅ Добавлено поле reject_reason в таблицу couriers")
-    
-    try:
-        c.execute("SELECT invited_at FROM couriers LIMIT 1")
-    except sqlite3.OperationalError:
-        c.execute("ALTER TABLE couriers ADD COLUMN invited_at TEXT")
-        logger.info("✅ Добавлено поле invited_at в таблицу couriers")
-    
-    conn.commit()
-    logger.info("✅ Таблицы созданы/проверены")
-    
-    # Загружаем данные из Google Sheets при старте
-    try:
-        load_from_google_sheets()
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Сначала включаем поддержку внешних ключей
+        c.execute("PRAGMA foreign_keys = ON")
+        
+        # Таблица пользователей (должна быть первой, так как на неё ссылаются другие)
+        c.execute('''CREATE TABLE IF NOT EXISTS users
+                     (user_id INTEGER PRIMARY KEY,
+                      username TEXT,
+                      first_name TEXT,
+                      last_name TEXT,
+                      registration_date TEXT,
+                      balance REAL DEFAULT 0,
+                      test_passed INTEGER DEFAULT 0,
+                      test_attempts INTEGER DEFAULT 0,
+                      last_test_attempt TEXT)''')
+        
+        # Таблица заявок на вывод
+        c.execute('''CREATE TABLE IF NOT EXISTS withdrawals
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      user_id INTEGER,
+                      amount REAL,
+                      payment_method TEXT,
+                      payment_details TEXT,
+                      status TEXT DEFAULT 'pending',
+                      request_date TEXT,
+                      completed_date TEXT,
+                      reject_reason TEXT,
+                      FOREIGN KEY (user_id) REFERENCES users(user_id))''')
+        
+        # Таблица тикетов поддержки
+        c.execute('''CREATE TABLE IF NOT EXISTS support_tickets
+                     (ticket_id TEXT PRIMARY KEY,
+                      user_id INTEGER,
+                      username TEXT,
+                      first_name TEXT,
+                      message TEXT,
+                      status TEXT DEFAULT 'open',
+                      created_at TEXT,
+                      answered_at TEXT,
+                      admin_reply TEXT,
+                      FOREIGN KEY (user_id) REFERENCES users(user_id))''')
+        
+        # Таблица курьеров
+        c.execute('''CREATE TABLE IF NOT EXISTS couriers
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      recruiter_id INTEGER,
+                      full_name TEXT,
+                      city TEXT,
+                      status TEXT DEFAULT 'pending',
+                      balance REAL DEFAULT 0,
+                      registered_at TEXT,
+                      confirmed_at TEXT,
+                      sheet_row INTEGER,
+                      orders_completed INTEGER DEFAULT 0,
+                      reject_reason TEXT,
+                      invited_at TEXT,
+                      FOREIGN KEY (recruiter_id) REFERENCES users(user_id))''')
+        
+        # Сохраняем изменения
+        conn.commit()
+        
+        # Проверяем и добавляем новые поля в таблицу couriers
+        # Для этого нужен отдельный commit после ALTER TABLE
+        try:
+            c.execute("SELECT orders_completed FROM couriers LIMIT 1")
+        except sqlite3.OperationalError:
+            c.execute("ALTER TABLE couriers ADD COLUMN orders_completed INTEGER DEFAULT 0")
+            conn.commit()
+            logger.info("✅ Добавлено поле orders_completed в таблицу couriers")
+        
+        try:
+            c.execute("SELECT reject_reason FROM couriers LIMIT 1")
+        except sqlite3.OperationalError:
+            c.execute("ALTER TABLE couriers ADD COLUMN reject_reason TEXT")
+            conn.commit()
+            logger.info("✅ Добавлено поле reject_reason в таблицу couriers")
+        
+        try:
+            c.execute("SELECT invited_at FROM couriers LIMIT 1")
+        except sqlite3.OperationalError:
+            c.execute("ALTER TABLE couriers ADD COLUMN invited_at TEXT")
+            conn.commit()
+            logger.info("✅ Добавлено поле invited_at в таблицу couriers")
+        
+        logger.info("✅ Таблицы созданы/проверены")
+        
+        # Загружаем данные из Google Sheets при старте
+        try:
+            load_from_google_sheets()
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки из Google Sheets при старте: {e}")
+        
+        # Пересчитываем балансы
+        try:
+            logger.info("🔄 Пересчитываем балансы после загрузки...")
+            recalc_all_balances()
+        except Exception as e:
+            logger.error(f"❌ Ошибка при пересчете балансов: {e}")
+        
+        logger.info("✅ База данных инициализирована")
+        return True
+        
     except Exception as e:
-        logger.error(f"❌ Ошибка загрузки из Google Sheets при старте: {e}")
-    
-    # Пересчитываем балансы
-    try:
-        logger.info("🔄 Пересчитываем балансы после загрузки...")
-        recalc_all_balances()
-    except Exception as e:
-        logger.error(f"❌ Ошибка при пересчете балансов: {e}")
-    
-    logger.info("✅ База данных инициализирована")
+        logger.error(f"❌ Критическая ошибка при инициализации БД: {e}")
+        logger.error(traceback.format_exc())
+        return False
 # ========== ФУНКЦИИ ДЛЯ ПЕРЕСЧЕТА БАЛАНСОВ ==========
 def recalc_all_balances():
     """Пересчитывает балансы всех пользователей"""
@@ -1435,19 +1453,51 @@ def backup_database():
         conn = get_db()
         c = conn.cursor()
         
+        # Проверяем, существует ли таблица users
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+        if not c.fetchone():
+            logger.debug("⏳ Таблицы еще не созданы, пропускаем бэкап")
+            return False
+        
+        # Получаем данные только если таблицы существуют
+        users = []
+        try:
+            users = [dict(row) for row in c.execute("SELECT * FROM users").fetchall()]
+        except Exception as e:
+            logger.error(f"Ошибка при чтении users: {e}")
+        
+        withdrawals = []
+        try:
+            withdrawals = [dict(row) for row in c.execute("SELECT * FROM withdrawals").fetchall()]
+        except Exception as e:
+            logger.error(f"Ошибка при чтении withdrawals: {e}")
+        
+        support_tickets = []
+        try:
+            support_tickets = [dict(row) for row in c.execute("SELECT * FROM support_tickets").fetchall()]
+        except Exception as e:
+            logger.error(f"Ошибка при чтении support_tickets: {e}")
+        
+        couriers = []
+        try:
+            couriers = [dict(row) for row in c.execute("SELECT * FROM couriers").fetchall()]
+        except Exception as e:
+            logger.error(f"Ошибка при чтении couriers: {e}")
+        
         backup = {
-            'users': [dict(row) for row in c.execute("SELECT * FROM users").fetchall()],
-            'withdrawals': [dict(row) for row in c.execute("SELECT * FROM withdrawals").fetchall()],
-            'support_tickets': [dict(row) for row in c.execute("SELECT * FROM support_tickets").fetchall()],
-            'couriers': [dict(row) for row in c.execute("SELECT * FROM couriers").fetchall()],
+            'users': users,
+            'withdrawals': withdrawals,
+            'support_tickets': support_tickets,
+            'couriers': couriers,
             'timestamp': datetime.now().isoformat()
         }
         
         with open(BACKUP_FILE, 'w', encoding='utf-8') as f:
             json.dump(backup, f, default=str, ensure_ascii=False, indent=2)
         
-        logger.info(f"💾 Автосохранение: {len(backup['users'])} users, {len(backup['couriers'])} couriers")
+        logger.info(f"💾 Автосохранение: {len(users)} users, {len(couriers)} couriers")
         return True
+        
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения бэкапа: {e}")
         return False
@@ -3923,3 +3973,4 @@ def main():
         allowed_updates=Update.ALL_TYPES
     )
     # ========== КОНЕЦ НАСТРОЙКИ ВЕБХУКА ==========
+
